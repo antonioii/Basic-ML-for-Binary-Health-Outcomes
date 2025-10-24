@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { ModelResult } from "../types";
 import { marked } from 'marked';
@@ -53,9 +52,11 @@ export const generateSummary = async (results: ModelResult[]): Promise<string> =
     `;
 
     try {
+        // FIX: The `contents` property should be a string for a simple text prompt.
+        // The previous value was a `Content[]`, which is not a valid type for this property.
         const response = await ai.models.generateContent({
           model: 'gemini-2.5-flash',
-          contents: [{ parts: [{ text: prompt }] }],
+          contents: prompt,
         });
         const text = response.text;
         return marked(text) as string;

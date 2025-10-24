@@ -1,4 +1,3 @@
-
 import { DataSet, TrainingConfig, ModelResult, ModelMetrics, RocPoint, KMeansResult } from '../types';
 
 // Helper to simulate async operations
@@ -103,12 +102,31 @@ const trainGradientBoosting = async (dataSet: DataSet): Promise<ModelResult> => 
     };
 };
 
+// Helper to create a seeded pseudo-random number generator for deterministic simulations.
+const createSeededRandom = (seed: number) => {
+    let currentSeed = seed;
+    return () => {
+        // Using a simple LCG algorithm. It's not cryptographically secure but perfect for deterministic simulations.
+        currentSeed = (currentSeed * 9301 + 49297) % 233280;
+        return currentSeed / 233280;
+    };
+};
 
 export const runKMeansElbow = (dataSet: DataSet): { k: number; inertia: number }[] => {
+    // Create a simple, deterministic seed from dataset properties. 
+    // This ensures that for the same dataset, the "random" elbow plot will always be identical,
+    // resolving the inconsistency between the configuration and results steps.
+    const seed = dataSet.data.reduce((acc, row) => {
+        return acc + (Object.values(row).reduce<number>((rowAcc, val) => 
+            rowAcc + (typeof val === 'number' ? val : 0), 0) ?? 0);
+    }, dataSet.data.length + dataSet.featureCols.length);
+
+    const seededRandom = createSeededRandom(seed);
+
     const elbowPlot: { k: number; inertia: number }[] = [];
-    let lastInertia = 1000 + Math.random() * 200;
+    let lastInertia = 1000 + seededRandom() * 200;
     for (let k = 1; k <= 10; k++) {
-        const inertiaDrop = (lastInertia / (k * k)) * (0.8 + Math.random() * 0.4);
+        const inertiaDrop = (lastInertia / (k * k)) * (0.8 + seededRandom() * 0.4);
         lastInertia -= inertiaDrop;
         elbowPlot.push({ k, inertia: Math.max(0, lastInertia) });
     }

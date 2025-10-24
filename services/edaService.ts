@@ -145,7 +145,8 @@ export const performEDA = (dataSet: DataSet): EdaResult => {
     distinctValues: new Set(data.map(row => row[col])).size,
   }));
   
-  // FIX: Explicitly type the accumulator for `reduce` to fix type inference issues.
+  // FIX: Explicitly typing the accumulator for `reduce` fixes type inference issues
+  // that could lead to downstream errors when calculating `totalTarget` and `imbalance`.
   const targetCounts = data.reduce((acc: { '0': number; '1': number }, row) => {
     const val = row[targetCol];
     if (val === 0) acc['0']++;
