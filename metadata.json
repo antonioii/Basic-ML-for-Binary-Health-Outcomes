@@ -1,0 +1,5 @@
+{
+  "name": "Health Data Science ML Pipeline",
+  "description": "An interactive web application for data scientists in the health sector. It allows users to upload clinical-epidemiological data, perform automated exploratory data analysis (EDA), apply cleaning suggestions, and train various machine learning models to predict binary outcomes. The app provides a comparative analysis of model performance with detailed metrics and visualizations like ROC curves.",
+  "requestFramePermissions": []
+}
