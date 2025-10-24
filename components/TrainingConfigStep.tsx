@@ -134,7 +134,7 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
                   onChange={(e) => setKMeansClusters(Number(e.target.value))}
                   min="2"
                   max="10"
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2"
+                  className="mt-1 block w-full rounded-md border-gray-300 bg-gray-50 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2"
                   disabled={!selectedModels.includes("K-Means Clustering")}
                 />
             </div>
