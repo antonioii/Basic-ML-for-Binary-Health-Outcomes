@@ -29,6 +29,9 @@ const SuggestionItem: React.FC<{suggestion: CleaningSuggestion, checked: boolean
                 />
                 <div className="ml-3 text-sm flex-1">
                     <label htmlFor={suggestion.id} className="font-medium text-gray-800 cursor-pointer">{suggestion.description}</label>
+                    {suggestion.details.reason && (
+                      <p className="text-xs text-gray-500 mt-1">{suggestion.details.reason}</p>
+                    )}
                     {hasDetails && (
                         <button onClick={() => setIsOpen(!isOpen)} className="text-blue-600 text-xs ml-2 hover:underline flex items-center">
                             {isOpen ? 'Hide IDs' : 'Show IDs'}
@@ -51,6 +54,7 @@ const CleaningStep: React.FC<CleaningStepProps> = ({ dataSet, edaResult, onClean
   const [suggestions, setSuggestions] = useState<CleaningSuggestion[]>(edaResult.cleaningSuggestions.map(s => ({ ...s, apply: true })));
   const [cleaningSummary, setCleaningSummary] = useState<CleaningSummary | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleToggle = (id: string) => {
     setSuggestions(prev =>
@@ -58,15 +62,19 @@ const CleaningStep: React.FC<CleaningStepProps> = ({ dataSet, edaResult, onClean
     );
   };
   
-  const handleApplyCleaning = () => {
-    setLoading(true);
-    const { cleanedData, summary } = applyCleaning(dataSet, suggestions);
-    // Simulate processing time
-    setTimeout(() => {
-        setCleaningSummary(summary);
-        setLoading(false);
-        setTimeout(() => onCleaningComplete(cleanedData), 2000); // Wait a bit before moving to next step
-    }, 1500);
+  const handleApplyCleaning = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const selectedIds = suggestions.filter(s => s.apply).map(s => s.id);
+      const response = await applyCleaning(dataSet.datasetId, selectedIds);
+      setCleaningSummary(response.summary);
+      setTimeout(() => onCleaningComplete(response.cleanedDataSet), 800);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (loading) {
@@ -93,6 +101,7 @@ const CleaningStep: React.FC<CleaningStepProps> = ({ dataSet, edaResult, onClean
                     <p>Columns Removed:</p><p className="font-mono text-right">{cleaningSummary.colsRemoved.length > 0 ? cleaningSummary.colsRemoved.join(', ') : '0'}</p>
                     <p>Final Sample Size:</p><p className="font-mono text-right">{cleaningSummary.finalRows}</p>
                     <p>Final Feature Count:</p><p className="font-mono text-right">{cleaningSummary.finalCols}</p>
+                    {cleaningSummary.notes && <><p>Notes:</p><p className="text-left text-gray-600 col-span-2">{cleaningSummary.notes}</p></>}
                 </div>
             </div>
         </Card>
@@ -125,12 +134,18 @@ const CleaningStep: React.FC<CleaningStepProps> = ({ dataSet, edaResult, onClean
         </div>
       )}
       
+      {error && (
+        <div className="mt-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg" role="alert">
+          {error}
+        </div>
+      )}
+
       <div className="flex justify-end mt-8">
-        <Button 
-            onClick={handleApplyCleaning} 
-            text="Apply Cleaning & Continue" 
-            icon={Trash2} 
-            disabled={suggestions.length === 0 && !suggestions.some(s => s.apply)}
+        <Button
+            onClick={handleApplyCleaning}
+            text="Apply Cleaning & Continue"
+            icon={Trash2}
+            disabled={loading}
         />
       </div>
     </Card>

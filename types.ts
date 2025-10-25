@@ -1,12 +1,16 @@
 
-export type DataRow = Record<string, string | number>;
+export type DataValue = string | number | null;
+export type DataRow = Record<string, DataValue>;
 
 export interface DataSet {
+  datasetId: string;
   fileName: string;
-  data: DataRow[];
-  idCol: string;
-  targetCol: string;
-  featureCols: string[];
+  rows: number;
+  cols: number;
+  idColumn: string;
+  targetColumn: string;
+  featureColumns: string[];
+  preview: DataRow[];
 }
 
 export enum AppStep {
@@ -30,6 +34,7 @@ export interface VariableInfo {
   type: VariableType;
   missing: number;
   distinctValues: number;
+  exampleValues?: DataValue[];
 }
 
 export interface OutlierInfo {
@@ -52,6 +57,8 @@ export interface EdaResult {
   outlierInfo: OutlierInfo[];
   correlationInfo: CorrelationInfo[];
   cleaningSuggestions: CleaningSuggestion[];
+  histograms: HistogramInfo[];
+  boxPlots: BoxPlotInfo[];
 }
 
 export type SuggestionType = 'missing' | 'outlier' | 'correlation';
@@ -65,6 +72,8 @@ export interface CleaningSuggestion {
     variables?: [string, string];
     value?: number;
     ids?: (string | number)[];
+    dropColumn?: string;
+    reason?: string;
   };
   apply: boolean;
 }
@@ -74,6 +83,7 @@ export interface CleaningSummary {
   colsRemoved: string[];
   finalRows: number;
   finalCols: number;
+  notes?: string;
 }
 
 export enum SvmFlexibility {
@@ -115,6 +125,22 @@ export interface KMeansResult {
     elbowPlot: { k: number; inertia: number }[];
     clusters: Record<string, (string|number)[]>;
     clusterAnalysis: { cluster: number; count: number; positiveRate: number }[];
+}
+
+export interface HistogramInfo {
+  variable: string;
+  bins: number[];
+  counts: number[];
+}
+
+export interface BoxPlotInfo {
+  variable: string;
+  median: number;
+  q1: number;
+  q3: number;
+  lowerWhisker: number;
+  upperWhisker: number;
+  outliers: (string | number)[];
 }
 
 

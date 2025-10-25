@@ -1,7 +1,7 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { DataSet, SvmFlexibility, TrainingConfig } from '../types';
-import { runKMeansElbow } from '../services/mlService';
+import { fetchKMeansElbow } from '../services/mlService';
 import Card from './common/Card';
 import Button from './common/Button';
 import { SlidersHorizontal, BarChart2 } from 'lucide-react';
@@ -25,9 +25,26 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
   const [selectedModels, setSelectedModels] = useState<string[]>(MODELS);
   const [svmFlexibility, setSvmFlexibility] = useState<SvmFlexibility>(SvmFlexibility.MEDIUM);
   
-  const elbowData = useMemo(() => runKMeansElbow(dataSet), [dataSet]);
+  const [elbowData, setElbowData] = useState<{ k: number; inertia: number }[]>([]);
+  const [elbowLoading, setElbowLoading] = useState<boolean>(false);
+  const [elbowError, setElbowError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadElbow = async () => {
+      try {
+        setElbowLoading(true);
+        const data = await fetchKMeansElbow(dataSet.datasetId);
+        setElbowData(data);
+      } catch (error) {
+        setElbowError((error as Error).message);
+      } finally {
+        setElbowLoading(false);
+      }
+    };
+    loadElbow();
+  }, [dataSet.datasetId]);
+
   const suggestedK = useMemo(() => {
-    // A simple heuristic to find the "elbow"
     if (elbowData.length < 3) return 2;
     let maxDiff = 0;
     let bestK = 2;
@@ -42,6 +59,10 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
   }, [elbowData]);
 
   const [kMeansClusters, setKMeansClusters] = useState<number>(suggestedK);
+
+  useEffect(() => {
+    setKMeansClusters(suggestedK);
+  }, [suggestedK]);
 
   const handleModelToggle = (model: string) => {
     setSelectedModels(prev =>
@@ -111,17 +132,25 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
             <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
                 <BarChart2 className="w-5 h-5 mr-2" /> K-Means Elbow Method
             </h3>
-            <div className="h-64 w-full bg-gray-50 p-2 rounded-lg border">
-                 <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={elbowData} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="k" label={{ value: 'Number of Clusters (k)', position: 'insideBottom', offset: -5, fontSize: 12 }} tick={{fontSize: 12}}/>
-                        <YAxis label={{ value: 'Inertia', angle: -90, position: 'insideLeft', fontSize: 12 }} tick={{fontSize: 12}} />
-                        <Tooltip />
-                        <Legend wrapperStyle={{fontSize: "12px"}}/>
-                        <Line type="monotone" dataKey="inertia" stroke="#8884d8" strokeWidth={2} />
-                    </LineChart>
+            <div className="h-64 w-full bg-gray-50 p-2 rounded-lg border flex items-center justify-center">
+              {elbowLoading ? (
+                <p className="text-gray-500">Computing elbow curve...</p>
+              ) : elbowError ? (
+                <p className="text-red-600 text-sm">{elbowError}</p>
+              ) : elbowData.length === 0 ? (
+                <p className="text-gray-500 text-sm">Insufficient data to compute elbow curve.</p>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={elbowData} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="k" label={{ value: 'Number of Clusters (k)', position: 'insideBottom', offset: -5, fontSize: 12 }} tick={{fontSize: 12}}/>
+                    <YAxis label={{ value: 'Inertia', angle: -90, position: 'insideLeft', fontSize: 12 }} tick={{fontSize: 12}} />
+                    <Tooltip />
+                    <Legend wrapperStyle={{fontSize: "12px"}}/>
+                    <Line type="monotone" dataKey="inertia" stroke="#8884d8" strokeWidth={2} />
+                  </LineChart>
                 </ResponsiveContainer>
+              )}
             </div>
             <div className="mt-4">
                 <label htmlFor="kmeans-k" className="block text-sm font-medium text-gray-700">
@@ -135,7 +164,7 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
                   min="2"
                   max="10"
                   className="mt-1 block w-full rounded-md border-gray-300 bg-gray-50 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2"
-                  disabled={!selectedModels.includes("K-Means Clustering")}
+                  disabled={!selectedModels.includes("K-Means Clustering") || elbowData.length === 0}
                 />
             </div>
           </div>

@@ -1,10 +1,10 @@
 
 import React, { useState, useCallback } from 'react';
-import * as XLSX from 'xlsx';
-import { DataRow, DataSet } from '../types';
+import { DataSet, DataRow } from '../types';
 import { UploadCloud, FileCheck2, AlertTriangle } from 'lucide-react';
 import Spinner from './common/Spinner';
 import Card from './common/Card';
+import { uploadDataset } from '../services/edaService';
 
 
 interface UploadStepProps {
@@ -15,6 +15,7 @@ const UploadStep: React.FC<UploadStepProps> = ({ onDataUploaded }) => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [dataSetPreview, setDataSetPreview] = useState<DataRow[] | null>(null);
 
   const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -25,71 +26,17 @@ const UploadStep: React.FC<UploadStepProps> = ({ onDataUploaded }) => {
     setFileName(file.name);
 
     try {
-      const data = await readFile(file);
-      const validatedData = validateData(data, file.name);
-      setTimeout(() => {
-        onDataUploaded(validatedData);
-        setLoading(false);
-      }, 1500); // Simulate processing
+      const dataset = await uploadDataset(file);
+      setDataSetPreview(dataset.preview);
+      onDataUploaded(dataset);
     } catch (err) {
       setError((err as Error).message);
-      setLoading(false);
       setFileName(null);
+      setDataSetPreview(null);
+    } finally {
+      setLoading(false);
     }
   }, [onDataUploaded]);
-
-  const readFile = (file: File): Promise<DataRow[]> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const data = e.target?.result;
-          const workbook = XLSX.read(data, { type: 'binary' });
-          const sheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[sheetName];
-          const jsonData = XLSX.utils.sheet_to_json(worksheet) as DataRow[];
-          resolve(jsonData);
-        } catch (err) {
-          reject(new Error('Failed to parse the file. Please ensure it is a valid .xlsx or .csv file.'));
-        }
-      };
-      reader.onerror = () => reject(new Error('Failed to read the file.'));
-      reader.readAsBinaryString(file);
-    });
-  };
-
-  const validateData = (data: DataRow[], fileName: string): DataSet => {
-    if (data.length === 0) throw new Error('File is empty.');
-    
-    const headers = Object.keys(data[0]);
-    if (headers.length < 3) throw new Error('File must have at least 3 columns (ID, one feature, Target).');
-
-    const idCol = headers[0];
-    const targetCol = headers[headers.length - 1];
-    const featureCols = headers.slice(1, -1);
-
-    const idValues = new Set();
-    data.forEach((row, index) => {
-      const id = row[idCol];
-      if (id === null || id === undefined) throw new Error(`Row ${index + 2} has a missing ID.`);
-      if (idValues.has(id)) throw new Error(`Duplicate ID found: ${id}. The first column must contain unique identifiers.`);
-      idValues.add(id);
-
-      const target = row[targetCol];
-      if (target !== 0 && target !== 1) {
-        throw new Error(`Invalid target value in row ${index + 2}. The last column must only contain 0 or 1.`);
-      }
-
-      for (const col of featureCols) {
-          const val = row[col];
-          if (val !== undefined && val !== null && typeof val !== 'number') {
-               throw new Error(`Invalid data type in feature column '${col}' at row ${index + 2}. All intermediate columns must be numeric.`);
-          }
-      }
-    });
-
-    return { fileName, data, idCol, targetCol, featureCols };
-  };
 
   return (
     <Card>
@@ -148,6 +95,35 @@ const UploadStep: React.FC<UploadStepProps> = ({ onDataUploaded }) => {
                 <li>No missing values are allowed in the ID or Target columns.</li>
             </ul>
         </div>
+        {fileName && !loading && !error && (
+          <div className="mt-8 text-left">
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">Dataset Preview</h3>
+            <div className="overflow-x-auto border border-gray-200 rounded-lg">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {Object.keys((dataSetPreview?.[0] || {})).map((col) => (
+                      <th key={col} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        {col}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {dataSetPreview?.map((row, idx) => (
+                    <tr key={idx}>
+                      {Object.entries(row).map(([key, value]) => (
+                        <td key={key} className="px-3 py-2 whitespace-nowrap text-sm text-gray-700">
+                          {value ?? '—'}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     </Card>
   );

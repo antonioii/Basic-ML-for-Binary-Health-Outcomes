@@ -40,14 +40,21 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
   const [activeTab, setActiveTab] = useState('comparison');
   const [geminiSummary, setGeminiSummary] = useState('');
   const [geminiLoading, setGeminiLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if(!results){
         const runTraining = async () => {
-          setLoading(true);
-          const trainedResults = await trainModels(dataSet, trainingConfig);
-          onResultsComplete(trainedResults);
-          setLoading(false);
+          try {
+            setLoading(true);
+            setError(null);
+            const trainedResults = await trainModels(dataSet, trainingConfig);
+            onResultsComplete(trainedResults);
+          } catch (err) {
+            setError((err as Error).message);
+          } finally {
+            setLoading(false);
+          }
         };
         runTraining();
     } else {
@@ -90,6 +97,10 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
     );
   }
 
+  if (error) {
+    return <Card><p className="text-center text-red-500">{error}</p></Card>;
+  }
+
   if (!results) {
     return <Card><p className="text-center text-red-500">Failed to get model results.</p></Card>;
   }
@@ -114,7 +125,21 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
                         <MetricCard title="Sensitivity" value={result.metrics!.sensitivity.toFixed(3)} />
                         <MetricCard title="Specificity" value={result.metrics!.specificity.toFixed(3)} />
                         <MetricCard title="VPP / Precision" value={result.metrics!.vpp.toFixed(3)} />
+                        <MetricCard title="VPN" value={result.metrics!.vpn.toFixed(3)} />
                     </div>
+                    {result.featureImportances && result.featureImportances.length > 0 && (
+                      <div className="lg:col-span-4 mt-4">
+                        <h4 className="text-sm font-semibold mb-2">Top Features</h4>
+                        <ul className="text-sm text-gray-700 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                          {result.featureImportances.slice(0, 6).map((feature) => (
+                            <li key={feature.feature} className="flex justify-between bg-gray-50 px-3 py-2 rounded">
+                              <span>{feature.feature}</span>
+                              <span className="font-mono">{feature.importance.toFixed(3)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                  </div>
             </Card>
         ))}
@@ -133,14 +158,36 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
                     <Tooltip />
                     <Legend />
                     <Line type="monotone" dataKey="tpr" stroke="#ccc" name="Random" dot={false} strokeDasharray="5 5" />
-                    {supervisedResults.map((result, i) => (
-                        <Line key={result.name} type="monotone" data={result.rocCurve} dataKey="tpr" name={`${result.name} (AUC=${result.metrics?.auc.toFixed(3)})`} stroke={colors[i % colors.length]} dot={false} strokeWidth={2}/>
+                    {supervisedResults.filter(result => result.rocCurve).map((result, i) => (
+                        <Line key={result.name} type="monotone" data={result.rocCurve!} dataKey="tpr" name={`${result.name} (AUC=${result.metrics?.auc.toFixed(3)})`} stroke={colors[i % colors.length]} dot={false} strokeWidth={2}/>
                     ))}
                 </LineChart>
             </ResponsiveContainer>
         </div>
     </Card>
   );
+
+  const handleDownloadClusters = () => {
+    if (!results) return;
+    const kMeans = results.find(r => r.name === 'K-Means Clustering')?.kMeansResult;
+    if (!kMeans) return;
+    const rows: string[][] = [['Cluster', 'ID']];
+    Object.entries(kMeans.clusters).forEach(([cluster, ids]) => {
+      ids.forEach(id => {
+        rows.push([cluster, String(id)]);
+      });
+    });
+    const csvContent = rows.map(row => row.join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'kmeans_clusters.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   const renderKMeans = () => {
     if (!kMeansResult) return <Card><p>K-Means was not selected.</p></Card>;
@@ -161,7 +208,7 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
                 </div>
             </Card>
             <Card>
-                <h3 className="text-xl font-bold text-gray-800 mb-4">Cluster Analysis (k={trainingConfig.kMeansClusters})</h3>
+                <h3 className="text-xl font-bold text-gray-800 mb-4">Cluster Analysis (k={kMeansResult.clusterAnalysis.length})</h3>
                 <table className="w-full text-sm text-left text-gray-500">
                     <thead className="text-xs text-gray-700 uppercase bg-gray-50">
                         <tr>
@@ -180,12 +227,48 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
                         ))}
                     </tbody>
                 </table>
+                <div className="mt-4 text-right">
+                    <Button onClick={handleDownloadClusters} text="Export Cluster Assignments" icon={Download} />
+                </div>
             </Card>
         </div>
     )
   };
 
   const bestModel = getBestModel();
+
+  const handleDownloadReport = () => {
+    if (!results) return;
+    const header = ['Model', 'AUC', 'Accuracy', 'Sensitivity', 'Specificity', 'VPP', 'VPN', 'F1', 'TP', 'FP', 'TN', 'FN'];
+    const rows = [header];
+    results.filter(r => r.metrics).forEach(result => {
+      const metrics = result.metrics!;
+      rows.push([
+        result.name,
+        metrics.auc.toFixed(4),
+        metrics.accuracy.toFixed(4),
+        metrics.sensitivity.toFixed(4),
+        metrics.specificity.toFixed(4),
+        metrics.vpp.toFixed(4),
+        metrics.vpn.toFixed(4),
+        metrics.f1Score.toFixed(4),
+        metrics.confusionMatrix.tp.toString(),
+        metrics.confusionMatrix.fp.toString(),
+        metrics.confusionMatrix.tn.toString(),
+        metrics.confusionMatrix.fn.toString(),
+      ]);
+    });
+    const csv = rows.map(row => row.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'model_metrics.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="space-y-6">
@@ -197,7 +280,7 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
                 </div>
                  <div className="flex items-center space-x-2 mt-4 md:mt-0">
                     <Button onClick={onRestart} text="Start New Analysis" icon={Redo} variant="secondary" />
-                    <Button onClick={() => {}} text="Download Report" icon={Download} />
+                    <Button onClick={handleDownloadReport} text="Download Report" icon={Download} />
                 </div>
              </div>
              {bestModel && (
