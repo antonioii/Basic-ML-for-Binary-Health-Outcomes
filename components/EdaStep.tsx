@@ -1,11 +1,12 @@
 
 import React, { useState, useEffect } from 'react';
-import { DataSet, EdaResult } from '../types';
-import { performEDA } from '../services/edaService';
+import { DataSet, EdaResult, HistogramInfo, BoxPlotInfo } from '../types';
+import { fetchEda } from '../services/edaService';
 import Spinner from './common/Spinner';
 import Card from './common/Card';
 import Button from './common/Button';
 import { BarChart, Users, AlertCircle, Link2, CheckCircle } from 'lucide-react';
+import { ResponsiveContainer, BarChart as ReBarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 
 interface EdaStepProps {
   dataSet: DataSet;
@@ -15,15 +16,22 @@ interface EdaStepProps {
 const EdaStep: React.FC<EdaStepProps> = ({ dataSet, onEdaComplete }) => {
   const [loading, setLoading] = useState(true);
   const [edaResult, setEdaResult] = useState<EdaResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const runEda = async () => {
-      setLoading(true);
-      // Simulate processing time for better UX
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      const result = performEDA(dataSet);
-      setEdaResult(result);
-      setLoading(false);
+      try {
+        setLoading(true);
+        setError(null);
+        const result = await fetchEda(dataSet.datasetId);
+        setEdaResult(result);
+      } catch (error) {
+        console.error(error);
+        setError((error as Error).message);
+        setEdaResult(null);
+      } finally {
+        setLoading(false);
+      }
     };
     runEda();
   }, [dataSet]);
@@ -56,6 +64,10 @@ const EdaStep: React.FC<EdaStepProps> = ({ dataSet, onEdaComplete }) => {
     );
   }
 
+  if (error) {
+    return <Card><p className="text-center text-red-500">{error}</p></Card>;
+  }
+
   if (!edaResult) {
     return <Card><p className="text-center text-red-500">Failed to perform EDA.</p></Card>;
   }
@@ -63,6 +75,69 @@ const EdaStep: React.FC<EdaStepProps> = ({ dataSet, onEdaComplete }) => {
   const { targetDistribution, missingInfo, outlierInfo, correlationInfo } = edaResult;
   const totalTarget = targetDistribution['0'] + targetDistribution['1'];
   const positiveClassPct = ((targetDistribution['1'] / totalTarget) * 100).toFixed(1);
+
+  const renderHistogram = (hist: HistogramInfo) => (
+    <Card key={hist.variable}>
+      <h3 className="text-md font-semibold text-gray-800 mb-3">{hist.variable} - Distribution</h3>
+      <div className="h-52">
+        <ResponsiveContainer>
+          <ReBarChart data={hist.counts.map((count, index) => ({
+            binLabel: `${hist.bins[index].toFixed(2)} - ${hist.bins[index + 1].toFixed(2)}`,
+            count,
+          }))}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="binLabel" tick={{ fontSize: 10 }} interval={0} angle={-45} textAnchor="end" height={60} />
+            <YAxis allowDecimals={false} />
+            <Tooltip />
+            <Bar dataKey="count" fill="#3b82f6" />
+          </ReBarChart>
+        </ResponsiveContainer>
+      </div>
+    </Card>
+  );
+
+  const renderVariableTable = () => (
+    <Card>
+      <h3 className="text-lg font-semibold text-gray-800 mb-3">Variable Classification</h3>
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Variable</th>
+              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Missing (%)</th>
+              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Distinct Values</th>
+              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Example Values</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200 text-sm">
+            {edaResult.variableInfo.map((info) => (
+              <tr key={info.name}>
+                <td className="px-4 py-2 font-medium text-gray-800">{info.name}</td>
+                <td className="px-4 py-2 text-gray-700">{info.type}</td>
+                <td className="px-4 py-2 text-gray-700">{info.missing.toFixed(2)}</td>
+                <td className="px-4 py-2 text-gray-700">{info.distinctValues}</td>
+                <td className="px-4 py-2 text-gray-500">{info.exampleValues?.slice(0, 3).join(', ')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+
+  const histogramCards = edaResult.histograms.slice(0, 4).map(renderHistogram);
+  const boxPlotCards = edaResult.boxPlots.slice(0, 4).map((box: BoxPlotInfo) => (
+    <Card key={box.variable}>
+      <h3 className="text-md font-semibold text-gray-800 mb-3">{box.variable} - Box Plot Summary</h3>
+      <ul className="text-sm text-gray-700 space-y-1">
+        <li><strong>Median:</strong> {box.median.toFixed(3)}</li>
+        <li><strong>Q1 - Q3:</strong> {box.q1.toFixed(3)} - {box.q3.toFixed(3)}</li>
+        <li><strong>Whiskers:</strong> {box.lowerWhisker.toFixed(3)} - {box.upperWhisker.toFixed(3)}</li>
+        <li><strong>Outlier IDs:</strong> {box.outliers.length > 0 ? box.outliers.slice(0, 5).join(', ') : 'None detected'}</li>
+      </ul>
+    </Card>
+  ));
 
   return (
     <div className="space-y-6">
@@ -100,7 +175,7 @@ const EdaStep: React.FC<EdaStepProps> = ({ dataSet, onEdaComplete }) => {
         </Card>
       </div>
 
-       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
             <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center"><AlertCircle className="w-5 h-5 mr-2 text-orange-600"/>Outlier Detection</h3>
             {outlierInfo.length > 0 ? (
@@ -118,6 +193,26 @@ const EdaStep: React.FC<EdaStepProps> = ({ dataSet, onEdaComplete }) => {
             ) : <p className="text-gray-600">No highly correlated feature pairs found.</p>}
         </Card>
       </div>
+
+      {renderVariableTable()}
+
+      {histogramCards.length > 0 && (
+        <div>
+          <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center"><BarChart className="w-5 h-5 mr-2 text-blue-600"/>Key Feature Distributions</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {histogramCards}
+          </div>
+        </div>
+      )}
+
+      {boxPlotCards.length > 0 && (
+        <div>
+          <h3 className="text-lg font-semibold text-gray-800 mb-4">Box Plot Summaries</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {boxPlotCards}
+          </div>
+        </div>
+      )}
 
       <div className="flex justify-end mt-8">
         <Button onClick={handleContinue} text="Continue to Data Cleaning" />
