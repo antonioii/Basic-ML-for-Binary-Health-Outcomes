@@ -135,3 +135,30 @@ running so the API stays online. Interrupt the execution (stop button / `Ctrl+C`
 
 If you want to exercise the UI from your local machine, update `VITE_API_URL` in `.env.local` to point at the LocalTunnel URL
 displayed in the notebook. Afterwards run the frontend locally (`npm run dev`) and interact with the Colab-hosted backend.
+
+## Quick Start Recap (Colab or Local Backend + Frontend)
+
+The checklist below summarises the workflow shared by the project maintainer for quickly spinning up the full stack, either with
+the backend in Google Colab or on your local machine:
+
+1. **Run the FastAPI backend**
+   - In Colab, execute the notebook cell that invokes `%%bash` to install dependencies and start `backend/main.py`. The helper
+     script prints a public `loca.lt` URL and the peer IP that acts as an access token.
+   - Locally, create a virtual environment, install the pinned dependencies (see the `pip install` block above), and run
+     `uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload`.
+2. **Verify the API** by opening `https://<your-tunnel>.loca.lt/docs` (or `http://localhost:8000/docs`) to confirm the Swagger UI
+   loads.
+3. **Set up the frontend**
+   - In the repository root, run `npm install` and create a `.env.local` file containing:
+     ```env
+     VITE_API_URL=https://<your-tunnel>.loca.lt/api  # or http://localhost:8000/api when running locally
+     GEMINI_API_KEY=<optional Gemini token>
+     ```
+   - Start the UI with `npm run dev` and open the printed URL (usually `http://localhost:5173`). The interface guides you through
+     the pipeline: **Upload → EDA → Clean → Configure → Results**.
+4. **Upload your dataset** via the frontend. Files are relayed to `/api/datasets` on the backend (tunnel URL when using Colab).
+5. **Keep services running** until you finish exploring the results. Stop `npm run dev` with `Ctrl+C` and interrupt the Colab cell
+   (or terminate Uvicorn) when done.
+
+> If the LocalTunnel hostname changes during a Colab session, update `VITE_API_URL` in `.env.local` and restart `npm run dev` so
+> Vite picks up the new value.

@@ -93,7 +93,7 @@ def health_check() -> dict:
     return {'status': 'ok'}
 
 
-@app.post('/api/datasets', response_model=DatasetResponse)
+@app.post('/api/datasets', response_model=DatasetResponse, response_model_by_alias=False)
 async def upload_dataset(file: UploadFile = File(...)) -> DatasetResponse:
     try:
         df = _read_dataset(file)
@@ -114,7 +114,7 @@ async def upload_dataset(file: UploadFile = File(...)) -> DatasetResponse:
     return response
 
 
-@app.get('/api/datasets/{dataset_id}/eda', response_model=EdaResponse)
+@app.get('/api/datasets/{dataset_id}/eda', response_model=EdaResponse, response_model_by_alias=False)
 def run_eda(dataset_id: str) -> EdaResponse:
     try:
         entry = dataset_store.get(dataset_id)
@@ -125,7 +125,7 @@ def run_eda(dataset_id: str) -> EdaResponse:
     return EdaResponse(**result)
 
 
-@app.post('/api/datasets/{dataset_id}/clean', response_model=CleaningResponse)
+@app.post('/api/datasets/{dataset_id}/clean', response_model=CleaningResponse, response_model_by_alias=False)
 def clean_dataset(dataset_id: str, request: CleaningRequest) -> CleaningResponse:
     try:
         entry = dataset_store.get(dataset_id)
@@ -149,7 +149,7 @@ def kmeans_elbow(dataset_id: str):
     return jsonable_encoder(elbow)
 
 
-@app.post('/api/datasets/{dataset_id}/train', response_model=TrainingResponse)
+@app.post('/api/datasets/{dataset_id}/train', response_model=TrainingResponse, response_model_by_alias=False)
 def train(dataset_id: str, config: TrainingConfigRequest) -> TrainingResponse:
     try:
         entry = dataset_store.get(dataset_id)
