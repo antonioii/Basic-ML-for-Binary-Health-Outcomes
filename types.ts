@@ -121,6 +121,8 @@ export interface RocPoint {
     tpr: number;
 }
 
+export type HyperparameterValue = string | number | boolean | null;
+
 export interface KMeansResult {
     elbowPlot: { k: number; inertia: number }[];
     clusters: Record<string, (string|number)[]>;
@@ -150,4 +152,5 @@ export interface ModelResult {
     rocCurve: RocPoint[] | null; // Null for unsupervised models
     kMeansResult?: KMeansResult;
     featureImportances?: { feature: string; importance: number }[];
+    hyperparameters: Record<string, HyperparameterValue>;
 }

@@ -1,12 +1,12 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { DataSet, TrainingConfig, ModelResult, ModelMetrics } from '../types';
 import { trainModels } from '../services/mlService';
 import { generateSummary } from '../services/geminiService';
 import Card from './common/Card';
 import Button from './common/Button';
 import Spinner from './common/Spinner';
-import { Award, BarChartHorizontal, Bot, BrainCircuit, Download, FileText, Redo, Sparkles } from 'lucide-react';
+import { Award, BarChartHorizontal, Bot, BrainCircuit, Download, FileText, ImageDown, Redo, Sparkles } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 interface ResultsStepProps {
@@ -41,6 +41,7 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
   const [geminiSummary, setGeminiSummary] = useState('');
   const [geminiLoading, setGeminiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const rocContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if(!results){
@@ -85,6 +86,76 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
       .reduce((best, current) => (current.metrics!.auc > best.metrics!.auc ? current : best), results[0]);
   }, [results]);
 
+  const formatHyperparameters = useCallback((params: ModelResult['hyperparameters']) => {
+    const entries = Object.entries(params || {});
+    if (!entries.length) {
+      return 'N/A';
+    }
+    return entries
+      .map(([key, value]) => `${key}: ${value ?? 'None'}`)
+      .join(' | ');
+  }, []);
+
+  const handleDownloadRocSvg = useCallback(() => {
+    if (!rocContainerRef.current) return;
+    const svg = rocContainerRef.current.querySelector('svg');
+    if (!svg) return;
+    const serializer = new XMLSerializer();
+    let source = serializer.serializeToString(svg);
+    if (!source.includes('xmlns="http://www.w3.org/2000/svg"')) {
+      source = source.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    const blob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'roc_curve.svg';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const handleDownloadRocPng = useCallback(() => {
+    if (!rocContainerRef.current) return;
+    const svg = rocContainerRef.current.querySelector('svg');
+    if (!svg) return;
+    const serializer = new XMLSerializer();
+    let source = serializer.serializeToString(svg);
+    if (!source.includes('xmlns="http://www.w3.org/2000/svg"')) {
+      source = source.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    const svgBlob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(svgBlob);
+    const image = new Image();
+    image.onload = () => {
+      const rect = svg.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      const canvas = document.createElement('canvas');
+      canvas.width = rect.width * scale;
+      canvas.height = rect.height * scale;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      context.setTransform(scale, 0, 0, scale, 0, 0);
+      context.drawImage(image, 0, 0, rect.width, rect.height);
+      const pngUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = pngUrl;
+      link.download = 'roc_curve.png';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+    };
+    image.src = url;
+  }, []);
+
   if (loading) {
     return (
       <Card>
@@ -127,6 +198,21 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
                         <MetricCard title="VPP / Precision" value={result.metrics!.vpp.toFixed(3)} />
                         <MetricCard title="VPN" value={result.metrics!.vpn.toFixed(3)} />
                     </div>
+                    {Object.keys(result.hyperparameters || {}).length > 0 && (
+                      <div className="lg:col-span-4 mt-4">
+                        <h4 className="text-sm font-semibold mb-2">Model Hyperparameters</h4>
+                        <div className="bg-gray-50 border border-gray-200 rounded p-3 text-sm text-gray-700">
+                          <ul className="space-y-1">
+                            {Object.entries(result.hyperparameters).map(([key, value]) => (
+                              <li key={key} className="flex justify-between">
+                                <span className="font-medium">{key}</span>
+                                <span className="font-mono">{value ?? 'None'}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    )}
                     {result.featureImportances && result.featureImportances.length > 0 && (
                       <div className="lg:col-span-4 mt-4">
                         <h4 className="text-sm font-semibold mb-2">Top Features</h4>
@@ -148,8 +234,14 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
 
   const renderRocCurve = () => (
     <Card>
-        <h3 className="text-xl font-bold text-gray-800 mb-4">ROC Curves</h3>
-        <div className="h-96 w-full">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-4">
+            <h3 className="text-xl font-bold text-gray-800">ROC Curves</h3>
+            <div className="flex space-x-2 mt-3 md:mt-0">
+                <Button onClick={handleDownloadRocSvg} text="Download SVG" icon={Download} variant="secondary" />
+                <Button onClick={handleDownloadRocPng} text="Download PNG" icon={ImageDown} variant="secondary" />
+            </div>
+        </div>
+        <div ref={rocContainerRef} className="h-96 w-full">
             <ResponsiveContainer>
                 <LineChart margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" />
@@ -239,10 +331,11 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
 
   const handleDownloadReport = () => {
     if (!results) return;
-    const header = ['Model', 'AUC', 'Accuracy', 'Sensitivity', 'Specificity', 'VPP', 'VPN', 'F1', 'TP', 'FP', 'TN', 'FN'];
+    const header = ['Model', 'AUC', 'Accuracy', 'Sensitivity', 'Specificity', 'VPP', 'VPN', 'F1', 'TP', 'FP', 'TN', 'FN', 'Hyperparameters'];
     const rows = [header];
     results.filter(r => r.metrics).forEach(result => {
       const metrics = result.metrics!;
+      const hyperparams = formatHyperparameters(result.hyperparameters);
       rows.push([
         result.name,
         metrics.auc.toFixed(4),
@@ -256,6 +349,7 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
         metrics.confusionMatrix.fp.toString(),
         metrics.confusionMatrix.tn.toString(),
         metrics.confusionMatrix.fn.toString(),
+        hyperparams,
       ]);
     });
     const csv = rows.map(row => row.join(',')).join('\n');
@@ -280,7 +374,7 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
                 </div>
                  <div className="flex items-center space-x-2 mt-4 md:mt-0">
                     <Button onClick={onRestart} text="Start New Analysis" icon={Redo} variant="secondary" />
-                    <Button onClick={handleDownloadReport} text="Download Report" icon={Download} />
+                    <Button onClick={handleDownloadReport} text="Download Report" icon={FileText} />
                 </div>
              </div>
              {bestModel && (
@@ -289,6 +383,9 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
                     <div>
                         <h4 className="font-bold text-blue-800">Best Performing Model</h4>
                         <p className="text-gray-700">Based on AUC, <strong>{bestModel.name}</strong> performed the best with an AUC of <strong>{bestModel.metrics?.auc.toFixed(3)}</strong>.</p>
+                        {Object.keys(bestModel.hyperparameters || {}).length > 0 && (
+                          <p className="text-sm text-blue-900 mt-2">Key hyperparameters: {formatHyperparameters(bestModel.hyperparameters)}</p>
+                        )}
                     </div>
                  </div>
              )}
