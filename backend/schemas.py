@@ -183,6 +183,7 @@ class ModelResult(BaseModel):
     rocCurve: Optional[List[RocPoint]] = Field(..., alias='roc_curve')
     kMeansResult: Optional[KMeansResult] = Field(default=None, alias='k_means_result')
     featureImportances: Optional[List[FeatureImportance]] = Field(default=None, alias='feature_importances')
+    hyperparameters: Dict[str, Union[str, float, int, None]] = Field(default_factory=dict)
 
     class Config:
         allow_population_by_field_name = True

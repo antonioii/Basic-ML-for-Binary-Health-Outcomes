@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -82,7 +82,14 @@ def _build_cv(y: pd.Series) -> StratifiedKFold:
     return StratifiedKFold(n_splits=max_splits, shuffle=True, random_state=42)
 
 
-def _evaluate_classifier(name: str, pipeline: Pipeline, X: pd.DataFrame, y: pd.Series, cv: StratifiedKFold) -> Dict:
+def _evaluate_classifier(
+    name: str,
+    pipeline: Pipeline,
+    X: pd.DataFrame,
+    y: pd.Series,
+    cv: StratifiedKFold,
+    hyperparameters: Dict[str, Union[str, int, float, None]] | None = None,
+) -> Dict:
     y_pred = cross_val_predict(pipeline, X, y, cv=cv, method='predict')
     if hasattr(pipeline.named_steps['classifier'], 'predict_proba'):
         y_proba = cross_val_predict(pipeline, X, y, cv=cv, method='predict_proba')[:, 1]
@@ -118,10 +125,17 @@ def _evaluate_classifier(name: str, pipeline: Pipeline, X: pd.DataFrame, y: pd.S
             'accuracy': float(accuracy),
         },
         'roc_curve': [{'fpr': float(f), 'tpr': float(t)} for f, t in zip(fpr, tpr)],
+        'hyperparameters': hyperparameters or {},
     }
 
 
-def _grid_search(pipeline: Pipeline, param_grid: Dict, X: pd.DataFrame, y: pd.Series, cv: StratifiedKFold) -> Pipeline:
+def _grid_search(
+    pipeline: Pipeline,
+    param_grid: Dict,
+    X: pd.DataFrame,
+    y: pd.Series,
+    cv: StratifiedKFold,
+) -> Tuple[Pipeline, Dict[str, Union[str, int, float]]]:
     grid = GridSearchCV(
         estimator=pipeline,
         param_grid=param_grid,
@@ -131,7 +145,7 @@ def _grid_search(pipeline: Pipeline, param_grid: Dict, X: pd.DataFrame, y: pd.Se
         refit=True,
     )
     grid.fit(X, y)
-    return grid.best_estimator_
+    return grid.best_estimator_, grid.best_params_
 
 
 def _train_logistic(df: pd.DataFrame, columns: List[str], y: pd.Series) -> Dict:
@@ -142,8 +156,21 @@ def _train_logistic(df: pd.DataFrame, columns: List[str], y: pd.Series) -> Dict:
     ])
     param_grid = {'classifier__C': [0.01, 0.1, 1.0, 10.0]}
     cv = _build_cv(y)
-    best_pipeline = _grid_search(pipeline, param_grid, df[columns], y, cv)
-    result = _evaluate_classifier(CLASSIFIER_NAMES['Logistic Regression'], best_pipeline, df[columns], y, cv)
+    best_pipeline, _ = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    classifier: LogisticRegression = best_pipeline.named_steps['classifier']
+    hyperparameters = {
+        'C': float(classifier.C),
+        'penalty': str(classifier.penalty),
+        'solver': str(classifier.solver),
+    }
+    result = _evaluate_classifier(
+        CLASSIFIER_NAMES['Logistic Regression'],
+        best_pipeline,
+        df[columns],
+        y,
+        cv,
+        hyperparameters,
+    )
     return result
 
 
@@ -158,8 +185,21 @@ def _train_knn(df: pd.DataFrame, columns: List[str], y: pd.Series) -> Dict:
     k_values = [k for k in range(1, max_k + 1, 2)]
     param_grid = {'classifier__n_neighbors': k_values}
     cv = _build_cv(y)
-    best_pipeline = _grid_search(pipeline, param_grid, df[columns], y, cv)
-    result = _evaluate_classifier(CLASSIFIER_NAMES['K-Nearest Neighbors (KNN)'], best_pipeline, df[columns], y, cv)
+    best_pipeline, _ = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    classifier: KNeighborsClassifier = best_pipeline.named_steps['classifier']
+    hyperparameters = {
+        'n_neighbors': int(classifier.n_neighbors),
+        'metric': str(classifier.metric),
+        'weights': str(classifier.weights),
+    }
+    result = _evaluate_classifier(
+        CLASSIFIER_NAMES['K-Nearest Neighbors (KNN)'],
+        best_pipeline,
+        df[columns],
+        y,
+        cv,
+        hyperparameters,
+    )
     return result
 
 
@@ -184,8 +224,21 @@ def _train_svm(df: pd.DataFrame, columns: List[str], y: pd.Series, flexibility: 
         'classifier__kernel': ['rbf'],
     }
     cv = _build_cv(y)
-    best_pipeline = _grid_search(pipeline, param_grid, df[columns], y, cv)
-    result = _evaluate_classifier(CLASSIFIER_NAMES['Support Vector Machine (SVM)'], best_pipeline, df[columns], y, cv)
+    best_pipeline, _ = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    classifier: SVC = best_pipeline.named_steps['classifier']
+    hyperparameters = {
+        'C': float(classifier.C),
+        'gamma': float(classifier.gamma),
+        'kernel': str(classifier.kernel),
+    }
+    result = _evaluate_classifier(
+        CLASSIFIER_NAMES['Support Vector Machine (SVM)'],
+        best_pipeline,
+        df[columns],
+        y,
+        cv,
+        hyperparameters,
+    )
     return result
 
 
@@ -199,8 +252,21 @@ def _train_random_forest(df: pd.DataFrame, columns: List[str], y: pd.Series) -> 
         'classifier__min_samples_split': [2, 5],
     }
     cv = _build_cv(y)
-    best_pipeline = _grid_search(pipeline, param_grid, df[columns], y, cv)
-    result = _evaluate_classifier(CLASSIFIER_NAMES['Random Forest'], best_pipeline, df[columns], y, cv)
+    best_pipeline, _ = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    classifier: RandomForestClassifier = best_pipeline.named_steps['classifier']
+    hyperparameters = {
+        'n_estimators': int(classifier.n_estimators),
+        'max_depth': None if classifier.max_depth is None else int(classifier.max_depth),
+        'min_samples_split': int(classifier.min_samples_split),
+    }
+    result = _evaluate_classifier(
+        CLASSIFIER_NAMES['Random Forest'],
+        best_pipeline,
+        df[columns],
+        y,
+        cv,
+        hyperparameters,
+    )
     feature_importances = _extract_feature_importances(best_pipeline)
     result['feature_importances'] = feature_importances
     return result
@@ -216,8 +282,22 @@ def _train_gradient_boost(df: pd.DataFrame, columns: List[str], y: pd.Series) ->
         'classifier__max_depth': [3, 5],
     }
     cv = _build_cv(y)
-    best_pipeline = _grid_search(pipeline, param_grid, df[columns], y, cv)
-    result = _evaluate_classifier(CLASSIFIER_NAMES['Gradient Boosting'], best_pipeline, df[columns], y, cv)
+    best_pipeline, _ = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    classifier: GradientBoostingClassifier = best_pipeline.named_steps['classifier']
+    hyperparameters = {
+        'n_estimators': int(classifier.n_estimators),
+        'learning_rate': float(classifier.learning_rate),
+        'max_depth': int(classifier.max_depth),
+        'loss': str(classifier.loss),
+    }
+    result = _evaluate_classifier(
+        CLASSIFIER_NAMES['Gradient Boosting'],
+        best_pipeline,
+        df[columns],
+        y,
+        cv,
+        hyperparameters,
+    )
     feature_importances = _extract_feature_importances(best_pipeline)
     result['feature_importances'] = feature_importances
     return result
@@ -324,6 +404,7 @@ def run_kmeans(entry: DatasetEntry, n_clusters: int) -> Dict:
             'clusters': cluster_mapping,
             'cluster_analysis': cluster_analysis,
         },
+        'hyperparameters': {},
     }
 
 
