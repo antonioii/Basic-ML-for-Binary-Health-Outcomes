@@ -1,7 +1,27 @@
-fastapi==0.110.0
-uvicorn[standard]==0.29.0
-pandas==2.2.1
+# ==== CORE NUMPY / PANDAS / SKLEARN STACK ====
 numpy==1.26.4
+pandas==2.2.1
 scikit-learn==1.4.1.post1
+scipy==1.16.2
 openpyxl==3.1.2
+joblib==1.5.2
+threadpoolctl==3.6.0
+python-dateutil==2.9.0.post0
+pytz==2025.2
+tzdata==2025.2
+
+# ==== BACKEND FASTAPI STACK (PINNED PARA PYTHON 3.11) ====
+fastapi==0.103.2
+uvicorn[standard]==0.23.2
+pydantic==1.10.15
+starlette==0.27.0
+anyio==3.7.1
+typing_extensions==4.12.2
+annotated-types==0.7.0
+
+# ==== SUPORTE E UTILIDADES ====
 python-multipart==0.0.9
+python-dotenv==1.0.1
+pyyaml==6.0.1
+websockets==15.0.1
+watchfiles==1.1.1
