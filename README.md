@@ -1,7 +1,7 @@
 <div align="center">
 
 # Health Data Science ML Pipeline  
-### Powered by <br> Google AI Studio - <img src="https://upload.wikimedia.org/wikipedia/commons/b/b5/Google_ai_studio_logo.png" width="30"/> <br> Codex - <img src="https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg" width="75"/>
+### Powered by <br> Google AI Studio - <img src="https://upload.wikimedia.org/wikipedia/commons/b/b5/Google_ai_studio_logo.png" width="30"/> <br> Codex - <img src="https://upload.wikimedia.org/wikipedia/commons/c/c3/Openai.png" width="30"/>
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)]()
 [![FastAPI](https://img.shields.io/badge/FastAPI-Backend-brightgreen)]()
