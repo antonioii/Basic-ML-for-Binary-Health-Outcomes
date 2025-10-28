@@ -14,7 +14,7 @@
 
 ## Abstract
 
-Atualmente há uma escassez de ferramentas **"health-care professionals-friendly"** que permitam aos profissionais de saúde explorar **Machine Learning** em seus próprios bancos de dados clínicos sem depender de fluxo de trabalho complexos.  
+Atualmmente existem poucas ferramentas de modelagem preditiva acessíveis e intuitivas para uso pelos profissionais de saúde de uma forma geral, ferramentas **"health-care professionals-friendly"** que permitam aos profissionais de saúde explorar facilmente **Machine Learning** em seus próprios bancos de dados clínicos sem depender de fluxos de trabalho complexos.  
 
 O **Health Data Science ML Pipeline** foi criado para preencher essa lacuna — oferecendo um **workflow padronizado e automatizado** que guia o usuário desde o upload do dataset até a geração dos resultados e interpretação dos modelos.  
 
