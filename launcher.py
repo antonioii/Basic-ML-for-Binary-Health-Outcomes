@@ -1,48 +1,53 @@
+###############################################################################
+# Launcher to run backend and frontend servers automatically
+###############################################################################
+
+# --- Libs ---
 import os
 import subprocess
 import threading
 import webbrowser
 import time
 import signal
+import sys
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 ###############################################################################
-# CONFIGURAÇÕES GERAIS
+# GENERAL CONFIGS
 ###############################################################################
 
-PROJECT_ROOT = os.path.abspath(os.getcwd())  # raiz do projeto
+# --- Folder (root) where this launcher is ---
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# --- Setting paths ---
 VENV_DIR = os.path.join(PROJECT_ROOT, ".venv")
 REQ_FILE = os.path.join(PROJECT_ROOT, "backend", "requirements.txt")
 ENV_LOCAL = os.path.join(PROJECT_ROOT, ".env.local")
 
-# Backend
+# --- Backend ---
 BACKEND_HOST = "0.0.0.0"
 BACKEND_PORT = "8000"
 BACKEND_ENTRY = "backend.main:app"
 
-# Frontend
+# --- Frontend ---
 FRONTEND_PORT = "3000"
 FRONTEND_URL = f"http://localhost:{FRONTEND_PORT}"
 
-# API URL que o frontend espera
+# --- API URL to frontend ---
 VITE_API_URL_VALUE = f"http://localhost:{BACKEND_PORT}/api"
 
-###############################################################################
-# ESTADO GLOBAL DOS PROCESSOS
-###############################################################################
-
+# --- Global process ---
 backend_proc = None
 frontend_proc = None
 
 
 ###############################################################################
-# FUNÇÕES AUXILIARES
+# Help functions
 ###############################################################################
 
 def create_or_update_env_file(api_key: str):
     """
-    Cria/atualiza .env.local com a API key.
+    Create/update .env.local with Google API key (optional).
     """
     lines = [
         f"VITE_API_URL={VITE_API_URL_VALUE}",
@@ -53,17 +58,16 @@ def create_or_update_env_file(api_key: str):
         f.write("\n".join(lines))
 
 
-def run_cmd(cmd_list, env=None, cwd=None, use_shell=False):
+def run_cmd(cmd_list, cwd=None, use_shell=False):
     """
-    Executa comando síncrono e retorna (rc, stdout, stderr).
-    use_shell=True para comandos tipo "npm ..." no Windows.
+    Execute syncronus command and return (rc, stdout, stderr).
+    use_shell=True to commands as 'npm ...' in Windows.
     """
     proc = subprocess.Popen(
         cmd_list if not use_shell else " ".join(cmd_list),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=cwd,
-        env=env,
         text=True,
         shell=use_shell,
     )
@@ -73,7 +77,7 @@ def run_cmd(cmd_list, env=None, cwd=None, use_shell=False):
 
 def ensure_venv():
     """
-    Garante .venv com Python 3.11.
+    .venv with Python 3.11 (more stable).
     """
     if os.path.isdir(VENV_DIR):
         return True, "VENV já existe."
@@ -83,13 +87,13 @@ def ensure_venv():
         use_shell=False
     )
     if rc != 0:
-        return False, f"Falha ao criar venv:\n{err}"
+        return False, f"Falha ao criar venv:\n{err or out}"
     return True, "VENV criada com sucesso."
 
 
 def pip_install_requirements(progress_callback=None):
     """
-    Dentro da venv:
+    Inside venv:
     1) python -m pip install --upgrade pip setuptools wheel
     2) pip install -r backend/requirements.txt
     """
@@ -104,104 +108,125 @@ def pip_install_requirements(progress_callback=None):
     for step in steps:
         rc, out, err = run_cmd(step, cwd=PROJECT_ROOT)
         if progress_callback:
-            progress_callback(out)
-            progress_callback(err)
+            if out:
+                progress_callback(out)
+            if err:
+                progress_callback(err)
         if rc != 0:
-            return False, f"Erro instalando dependências:\n{err}"
-    return True, "Dependências instaladas."
+            return False, f"Erro instalando dependências:\n{err or out}"
+
+    return True, "Dependências backend instaladas."
 
 
 def npm_install_if_needed(progress_callback=None):
     """
-    Executa 'npm install' se node_modules não existir.
-    Aqui usamos shell=True pra deixar o Windows resolver npm.cmd.
+    Execute 'npm install' if node_modules/ doesn't exist.
+    shell=True to found npm.cmd in Windows.
     """
     node_modules_dir = os.path.join(PROJECT_ROOT, "node_modules")
     if os.path.isdir(node_modules_dir):
         if progress_callback:
-            progress_callback("node_modules já existe, pulando npm install.\n")
+            progress_callback("[frontend] node_modules já existe, pulando npm install.")
         return True, "npm install pulado."
 
     rc, out, err = run_cmd(["npm", "install"], cwd=PROJECT_ROOT, use_shell=True)
     if progress_callback:
-        progress_callback(out)
-        progress_callback(err)
+        if out:
+            progress_callback(out)
+        if err:
+            progress_callback(err)
     if rc != 0:
-        return False, f"Erro no npm install:\n{err}"
-    return True, "npm install concluído."
+        return False, f"Erro no npm install:\n{err or out}"
+
+    return True, "Dependências frontend instaladas."
 
 
 def start_backend():
     """
-    Sobe backend (uvicorn) usando a venv.
+    Start backend (uvicorn) with venv.
+    IMPORTANT: Do NOT capture stdout/stderr in PIPE in order to not buffer / block execution.
     """
     global backend_proc
     python_exe = os.path.join(VENV_DIR, "Scripts", "python.exe")
 
     cmd = [
         python_exe,
-        "-m",
-        "uvicorn",
+        "-m", "uvicorn",
         BACKEND_ENTRY,
-        "--host",
-        BACKEND_HOST,
-        "--port",
-        BACKEND_PORT,
+        "--host", BACKEND_HOST,
+        "--port", BACKEND_PORT,
         "--reload",
     ]
+
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
     backend_proc = subprocess.Popen(
         cmd,
         cwd=PROJECT_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,  # Do NOT block in PIPE
+        stderr=subprocess.DEVNULL,  # Same
         text=True,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP  # ajuda matar depois
+        creationflags=creationflags
     )
+
+    # Short rest to aware crashes
+    time.sleep(1.5)
+    if backend_proc.poll() is not None:
+        raise RuntimeError("Backend não conseguiu iniciar (processo terminou cedo).")
+
     return backend_proc
 
 
 def start_frontend():
     """
     Roda `npm run dev` em processo separado.
-    shell=True no Windows pra localizar npm.cmd.
+    Também sem PIPE pra não travar.
     """
     global frontend_proc
 
     cmd = ["npm", "run", "dev"]
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
     frontend_proc = subprocess.Popen(
         " ".join(cmd),
         cwd=PROJECT_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         text=True,
         shell=True,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        creationflags=creationflags
     )
+
+    # Short rest to aware crashes
+    time.sleep(1.5)
+    if frontend_proc.poll() is not None:
+        raise RuntimeError("Frontend não conseguiu iniciar (processo terminou cedo).")
+
     return frontend_proc
 
 
 def terminate_process(proc):
     """
-    Tenta encerrar um processo aberto via Popen no Windows.
+    End open process.
     """
     if proc and proc.poll() is None:
         try:
-            proc.send_signal(signal.CTRL_BREAK_EVENT)
-            time.sleep(0.5)
-        except Exception:
-            pass
-        try:
+            if sys.platform.startswith("win"):
+                # CTRL_BREAK_EVENT only works if proc was created in "new process group"
+                try:
+                    proc.send_signal(signal.CTRL_BREAK_EVENT)
+                    time.sleep(0.5)
+                except Exception:
+                    pass
             proc.terminate()
             time.sleep(0.5)
         except Exception:
             pass
-        try:
-            if proc.poll() is None:
+        if proc.poll() is None:
+            try:
                 proc.kill()
-        except Exception:
-            pass
+            except Exception:
+                pass
 
 
 ###############################################################################
@@ -215,28 +240,23 @@ class App(tk.Tk):
         self.geometry("480x360")
         self.resizable(False, False)
 
-        # estados:
-        # - "start": pedir API key e botão Start
-        # - "running": botão End Application
+        # "start" -> ask API Key and Start
+        # "running" -> End Application btn
         self.current_state = "start"
 
-        # frame principal
         self.frame_main = ttk.Frame(self, padding=20)
         self.frame_main.pack(fill="both", expand=True)
 
-        # campo de log
         self.log_text = tk.Text(self, height=7, state="disabled", wrap="word")
         self.log_text.pack(fill="both", padx=20, pady=(0, 10), expand=False)
 
-        # label de loading animado
         self.loading_label = ttk.Label(self, text="")
         self.loading_label.pack(pady=(0, 10))
 
-        self.loading_running = False  # controla animação "carregando..."
+        self.loading_running = False
 
         self.build_start_screen()
 
-        # fechar no X
         self.protocol("WM_DELETE_WINDOW", self.on_close_request)
 
     def clear_frame(self):
@@ -247,15 +267,12 @@ class App(tk.Tk):
         if not msg:
             return
         self.log_text.config(state="normal")
-        self.log_text.insert("end", msg + "\n")
+        self.log_text.insert("end", msg.rstrip() + "\n")
         self.log_text.see("end")
         self.log_text.config(state="disabled")
         self.update_idletasks()
 
     def set_loading(self, active: bool):
-        """
-        Liga/desliga a animação "carregando..."
-        """
         self.loading_running = active
         if active:
             self.loading_label.config(text="⏳ Inicializando...")
@@ -264,56 +281,48 @@ class App(tk.Tk):
             self.loading_label.config(text="")
 
     def animate_loading(self):
-        """
-        Pisca/rotaciona o texto enquanto loading_running=True.
-        """
         if not self.loading_running:
             return
         current = self.loading_label.cget("text")
-        # Cria um efeito bobo girando pontinhos
-        variants = [
+        frames = [
             "⏳ Inicializando...",
             "⏳ Inicializando.. ",
             "⏳ Inicializando.  ",
             "⏳ Inicializando   ",
         ]
         try:
-            idx = variants.index(current)
-            nxt = variants[(idx + 1) % len(variants)]
+            idx = frames.index(current)
+            nxt = frames[(idx + 1) % len(frames)]
         except ValueError:
-            nxt = variants[0]
+            nxt = frames[0]
         self.loading_label.config(text=nxt)
-        # agenda próxima troca
         self.after(400, self.animate_loading)
 
     def build_start_screen(self):
         self.current_state = "start"
         self.clear_frame()
 
-        lbl_title = ttk.Label(
+        ttk.Label(
             self.frame_main,
             text="Basic ML Launcher",
             font=("Segoe UI", 14, "bold")
-        )
-        lbl_title.pack(pady=(0, 10))
+        ).pack(pady=(0, 10))
 
-        lbl_desc = ttk.Label(
+        ttk.Label(
             self.frame_main,
-            text="Insira sua GEMINI_API_KEY (opcional) e clique em Start Execution.\n"
-                 "A aplicação será iniciada no navegador.",
+            text="Insira sua GEMINI_API_KEY (opcional) e clique em Start.\n"
+                 "O app abrirá no navegador.",
             justify="center"
-        )
-        lbl_desc.pack(pady=(0, 20))
+        ).pack(pady=(0, 20))
 
-        # Campo API Key
         self.api_var = tk.StringVar()
         row_frame = ttk.Frame(self.frame_main)
         row_frame.pack(pady=(0, 10), fill="x")
+
         ttk.Label(row_frame, text="GEMINI_API_KEY:").pack(anchor="w")
         self.api_entry = ttk.Entry(row_frame, textvariable=self.api_var, show="*")
         self.api_entry.pack(fill="x")
 
-        # Botão Start
         self.start_btn = ttk.Button(
             self.frame_main,
             text="Start Execution",
@@ -321,36 +330,29 @@ class App(tk.Tk):
         )
         self.start_btn.pack(pady=(10, 5))
 
-        # Info
-        small_info = ttk.Label(
+        ttk.Label(
             self.frame_main,
-            text="Ao iniciar:\n"
-                 "1. Ambiente Python será configurado\n"
-                 "2. Backend e Frontend serão iniciados\n"
-                 "3. Seu navegador abrirá automaticamente",
+            text="Fluxo:\n1. Configura ambiente\n2. Sobe backend+frontend\n3. Abre navegador",
             justify="center",
             font=("Segoe UI", 9)
-        )
-        small_info.pack(pady=(10, 0))
+        ).pack(pady=(10, 0))
 
     def build_running_screen(self):
         self.current_state = "running"
         self.clear_frame()
 
-        lbl_running = ttk.Label(
+        ttk.Label(
             self.frame_main,
             text="Aplicação em execução",
             font=("Segoe UI", 14, "bold")
-        )
-        lbl_running.pack(pady=(0, 10))
+        ).pack(pady=(0, 10))
 
-        lbl_hint = ttk.Label(
+        ttk.Label(
             self.frame_main,
-            text="Use a aplicação no navegador.\n"
-                 "Quando terminar, clique em End Application.",
+            text=f"Use a aplicação em {FRONTEND_URL}.\n"
+                 "Quando terminar clique em End Application.",
             justify="center"
-        )
-        lbl_hint.pack(pady=(0, 20))
+        ).pack(pady=(0, 20))
 
         self.stop_btn = ttk.Button(
             self.frame_main,
@@ -360,9 +362,6 @@ class App(tk.Tk):
         self.stop_btn.pack(pady=(10, 5))
 
     def disable_start_ui(self):
-        """
-        Enquanto carrega: bloqueia os inputs.
-        """
         try:
             self.start_btn.config(state="disabled")
         except Exception:
@@ -373,9 +372,6 @@ class App(tk.Tk):
             pass
 
     def enable_start_ui(self):
-        """
-        Se algo falhar e a gente quiser deixar tentar de novo.
-        """
         try:
             self.start_btn.config(state="normal")
         except Exception:
@@ -386,9 +382,6 @@ class App(tk.Tk):
             pass
 
     def on_start_clicked(self):
-        """
-        Inicia a thread que faz todo o bootstrap.
-        """
         self.disable_start_ui()
         self.set_loading(True)
         self.append_log("Iniciando preparação...")
@@ -396,46 +389,34 @@ class App(tk.Tk):
         th.start()
 
     def bootstrap_and_run(self):
-        """
-        Passo a passo:
-        - cria/atualiza .env.local
-        - garante venv
-        - pip install
-        - npm install se necessário
-        - sobe backend e frontend
-        - abre navegador
-        - troca tela pra 'running'
-        """
         # 1. .env.local
+        api_value = ""
         try:
             api_value = self.api_var.get().strip()
         except Exception:
-            api_value = ""
+            pass
         create_or_update_env_file(api_value)
-        self.append_log(".env.local atualizado (API Key opcional aplicada).")
+        self.append_log(".env.local atualizado.")
 
         # 2. venv
         ok, msg = ensure_venv()
         self.append_log(msg)
         if not ok:
-            self.append_log("Falha crítica ao criar venv. Abortando.")
-            self.safe_fail("Erro", msg)
+            self.safe_fail("Erro criando venv", msg)
             return
 
         # 3. pip install
         ok, msg = pip_install_requirements(progress_callback=self.append_log)
         self.append_log(msg)
         if not ok:
-            self.append_log("Falha crítica ao instalar dependências. Abortando.")
-            self.safe_fail("Erro em pip install", msg)
+            self.safe_fail("Erro instalando backend", msg)
             return
 
-        # 4. npm install (se precisar)
+        # 4. npm install
         ok, msg = npm_install_if_needed(progress_callback=self.append_log)
         self.append_log(msg)
         if not ok:
-            self.append_log("Falha crítica no npm install. Abortando.")
-            self.safe_fail("Erro em npm install", msg)
+            self.safe_fail("Erro instalando frontend", msg)
             return
 
         # 5. backend
@@ -443,9 +424,7 @@ class App(tk.Tk):
             start_backend()
             self.append_log("Backend iniciado em http://localhost:8000")
         except Exception as e:
-            err_msg = f"Falha ao iniciar backend: {e}"
-            self.append_log(err_msg)
-            self.safe_fail("Erro ao iniciar backend", err_msg)
+            self.safe_fail("Erro ao iniciar backend", str(e))
             return
 
         # 6. frontend
@@ -453,56 +432,39 @@ class App(tk.Tk):
             start_frontend()
             self.append_log(f"Frontend iniciado em {FRONTEND_URL}")
         except Exception as e:
-            err_msg = f"Falha ao iniciar frontend: {e}"
-            self.append_log(err_msg)
-            # mata backend antes de sair
+            # se frontend falhar, derruba backend também
             self.stop_processes()
-            self.safe_fail("Erro ao iniciar frontend", err_msg)
+            self.safe_fail("Erro ao iniciar frontend", str(e))
             return
 
-        # 7. abrir navegador
+        # 7. browser
         try:
             webbrowser.open(FRONTEND_URL)
             self.append_log("Navegador aberto.")
         except Exception as e:
-            self.append_log(f"Não consegui abrir navegador automaticamente: {e}")
+            self.append_log(f"Falha ao abrir navegador automaticamente: {e}")
 
-        # 8. tudo ok -> estado running
+        # 8. Ok
         self.after(0, self.to_running_state)
 
     def to_running_state(self):
-        """
-        Chamado só se tudo deu certo.
-        """
         self.set_loading(False)
         self.build_running_screen()
 
     def safe_fail(self, title, msg):
-        """
-        Chamado quando algo deu errado no bootstrap.
-        Volta pra tela inicial "tentar de novo".
-        """
         def _do():
             self.set_loading(False)
             self.enable_start_ui()
             messagebox.showerror(title, msg)
-            # não mata backend aqui porque se deu erro, backend provavelmente nem subiu
         self.after(0, _do)
 
     def on_stop_clicked(self):
-        """
-        Botão End Application
-        """
         self.append_log("Encerrando aplicação...")
         self.stop_processes()
         self.append_log("Finalizado. Fechando janela.")
-        # pequena pausa só pra mensagem aparecer
         self.after(300, self.destroy)
 
     def stop_processes(self):
-        """
-        Encerra backend e frontend.
-        """
         global backend_proc, frontend_proc
         try:
             terminate_process(frontend_proc)
@@ -514,10 +476,6 @@ class App(tk.Tk):
             pass
 
     def on_close_request(self):
-        """
-        Clicar no X da janela.
-        Se já está rodando, pergunta se quer encerrar tudo.
-        """
         if self.current_state == "running":
             if messagebox.askyesno(
                 "Encerrar?",
@@ -529,15 +487,8 @@ class App(tk.Tk):
         else:
             self.destroy()
 
-    def safe_show_error(self, title, msg):
-        """
-        (mantido, mas agora usamos safe_fail)
-        """
-        def _show():
-            messagebox.showerror(title, msg)
-        self.after(0, _show)
-
 
 if __name__ == "__main__":
     app = App()
     app.mainloop()
+
