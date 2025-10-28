@@ -439,6 +439,8 @@ class App(tk.Tk):
 
         # 7. browser
         try:
+            self.append_log("Aguarde 30s, servidores carregando...")
+            time.sleep(30)
             webbrowser.open(FRONTEND_URL)
             self.append_log("Navegador aberto.")
         except Exception as e:
