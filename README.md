@@ -116,53 +116,8 @@ Então abre o navegador após 30 segundos dos servidores rodando já com a inter
 
 ## Running in Google Colab (with LocalTunnel)
 
-O programa também pode ser executado em um notebook Jupyter através do Google Colab (atualmmente apenas o server backend). Para isso, execute o backend diretamente em um notebook do Colab e conecte a interface local usando o túnel fornecido conforme o processo abaixo:
-
-### 1. Clone o repositório
-
-```
-!git clone https://github.com/<your-account>/Basic-ML-for-Binary-Health-Outcomes.git
-%cd Basic-ML-for-Binary-Health-Outcomes
-```
-
-### 2. Instale as dependências
-
-```
-!pip install -r backend/requirements.txt
-!npm install -g localtunnel
-```
-
-> Se o comando `npm` não estiver disponível, execute:  
-> `!apt-get install nodejs npm`
-
-### 3. Inicie o backend com túnel público
-
-```
-!python backend/colab_runner.py --port 8000
-```
-
-A célula exibirá os endereços locais e públicos (via `loca.lt`). Mantenha a célula ativa para manter o servidor online.
-
-**Parâmetros úteis:**
-- `--no-localtunnel`: roda o backend apenas localmente  
-- `--subdomain nome`: solicita um subdomínio específico  
-- `--log-level debug`: aumenta a verbosidade do log  
-
-### 4. Conecte o frontend (opcional)
-
-No arquivo `.env.local` da sua máquina local, atualize:
-
-```
-VITE_API_URL=https://<seu-túnel>.loca.lt/api
-```
-
-Então rode:
-
-```
-npm run dev
-```
-
-Abra o URL impresso pelo Vite (geralmente `http://localhost:5173`) e teste o backend hospedado no Colab.
+> [Em produção — o link do Colab será disponibilizado aqui, assim como o passo-a-passo futuramente.]
+> *(Espaço reservado para instruções da execução não-local (pelo Google Colab)*
 
 ---
 
