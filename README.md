@@ -71,10 +71,19 @@ O fluxo de trabalho foi desenhado para que o profissional de saúde possa realiz
 
 ---
 
-## Instructional Video
+## 🎥 Instructional Video
 
-> [Em produção — o link do vídeo de demonstração será disponibilizado aqui.]  
-> *(Espaço reservado para vídeo de instruções passo a passo: instalação, execução local e fluxo da interface.)*
+[![Watch the video](https://img.youtube.com/vi/_x5e5cBSl70/maxresdefault.jpg)](https://www.youtube.com/watch?v=_x5e5cBSl70)
+
+Este tutorial em video demonstra:
+- Introdução
+- Fluxo de trabalho
+- Como instalar o app localmente
+- Como executar o programa e criar uma chave de API do Google
+- Fazer upload do banco de dados
+- Treinar e avaliar modelos de machine learning básicos (KNN, SVM, Logistic Regression, etc)
+- Interpretar os resultados explorando a curva ROC, métricas e parâmetros
+
 
 ---
 
