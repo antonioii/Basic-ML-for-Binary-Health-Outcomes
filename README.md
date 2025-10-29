@@ -107,7 +107,7 @@ Então abre o navegador após 30 segundos dos servidores rodando já com a inter
 
 ## Running in Google Colab (with LocalTunnel)
 
-O programa também pode ser executado em um notebook Jupyter através do Google Colab. Para isso, execute o backend diretamente em um notebook do Colab e conecte a interface local usando o túnel fornecido.
+O programa também pode ser executado em um notebook Jupyter através do Google Colab (atualmmente apenas o server backend). Para isso, execute o backend diretamente em um notebook do Colab e conecte a interface local usando o túnel fornecido conforme o processo abaixo:
 
 ### 1. Clone o repositório
 
