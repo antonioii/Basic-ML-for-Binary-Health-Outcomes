@@ -101,7 +101,7 @@ const App: React.FC = () => {
             <h1 className="text-xl font-bold text-gray-800">Health Data Science ML Pipeline</h1>
 
           </div>
-           <a href="https://github.com/your-repo" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-gray-800 transition-colors">
+           <a href="https://github.com/antonioii/Basic-ML-for-Binary-Health-Outcomes" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-gray-800 transition-colors">
               <Github size={24} />
            </a>
         </div>
