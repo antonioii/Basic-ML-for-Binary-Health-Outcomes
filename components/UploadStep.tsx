@@ -42,7 +42,7 @@ const UploadStep: React.FC<UploadStepProps> = ({ onDataUploaded }) => {
     <Card>
       <div className="text-center">
         <h2 className="text-2xl font-bold text-gray-800 mb-2">Upload Your Dataset</h2>
-        <p className="text-gray-600 mb-6">Select a pre-processed .xlsx or .csv file to begin the analysis.</p>
+        <p className="text-gray-600 mb-6">Select a pre-processed database (excel, .xlsx) file to begin the analysis.</p>
         
         <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 hover:border-blue-500 transition-colors duration-300 bg-gray-50">
           <input
