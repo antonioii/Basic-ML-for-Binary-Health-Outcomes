@@ -98,7 +98,9 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
 
   const handleDownloadRocSvg = useCallback(() => {
     if (!rocContainerRef.current) return;
-    const svg = rocContainerRef.current.querySelector('svg');
+    const svg =
+      rocContainerRef.current.querySelector('.recharts-wrapper svg') ??
+      rocContainerRef.current.querySelector('svg');
     if (!svg) return;
     const serializer = new XMLSerializer();
     let source = serializer.serializeToString(svg);
@@ -118,7 +120,9 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
 
   const handleDownloadRocPng = useCallback(() => {
     if (!rocContainerRef.current) return;
-    const svg = rocContainerRef.current.querySelector('svg');
+    const svg =
+      rocContainerRef.current.querySelector('.recharts-wrapper svg') ??
+      rocContainerRef.current.querySelector('svg');
     if (!svg) return;
     const serializer = new XMLSerializer();
     let source = serializer.serializeToString(svg);
