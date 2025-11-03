@@ -182,9 +182,28 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
   
   const supervisedResults = results.filter(r => r.metrics);
   const kMeansResult = results.find(r => r.name === 'K-Means Clustering')?.kMeansResult;
+  const errorResults = results.filter(
+    r => !r.metrics && typeof r.hyperparameters?.error === 'string'
+  );
 
   const renderComparisonTable = () => (
     <div className="space-y-6">
+        {errorResults.length > 0 && (
+          <Card>
+            <h3 className="text-xl font-bold text-gray-800 mb-3">Models Not Trained</h3>
+            <p className="text-sm text-gray-600 mb-2">
+              The following models were skipped during training:
+            </p>
+            <ul className="space-y-1 text-sm text-gray-700">
+              {errorResults.map(result => (
+                <li key={result.name} className="flex flex-col sm:flex-row sm:items-center sm:space-x-2">
+                  <span className="font-semibold text-gray-800">{result.name}</span>
+                  <span className="text-gray-600">{result.hyperparameters?.error as string}</span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
         {supervisedResults.map((result) => (
             <Card key={result.name}>
                  <h3 className="text-xl font-bold text-gray-800 mb-4">{result.name}</h3>
