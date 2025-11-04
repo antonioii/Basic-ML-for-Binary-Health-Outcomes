@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+import math
+
 import re
+
+import os
 
 import numpy as np
 import pandas as pd
@@ -51,6 +55,25 @@ except ImportError:  # pragma: no cover - optional dependency
     CatBoostClassifier = None  # type: ignore
 
 RANDOM_STATE = 42
+
+
+def _max_parallel_jobs() -> int:
+    """Return a conservative number of parallel workers.
+
+    The training step runs inside the web API process, so aggressively using all
+    available CPU cores can easily exhaust memory – especially on Windows where
+    joblib spawns fresh interpreter processes.  When that happens the operating
+    system terminates the backend process and the frontend surfaces a generic
+    "Failed to fetch" error.  Limiting the worker pool keeps resource usage
+    predictable while still allowing moderate parallelism on larger machines.
+    """
+
+    cpu_count = os.cpu_count() or 1
+    if cpu_count <= 2:
+        return 1
+    if cpu_count <= 4:
+        return 2
+    return min(4, cpu_count // 2)
 
 
 class MissingDependencyError(RuntimeError):
@@ -158,6 +181,10 @@ def _build_preprocessor(df: pd.DataFrame, columns: List[str]) -> ColumnTransform
 
 def _build_cv(y: pd.Series) -> StratifiedKFold:
     class_counts = y.value_counts()
+    if class_counts.size < 2:
+        raise ValueError(
+            "Target column must contain at least two distinct classes (0 and 1) for supervised model training."
+        )
     max_splits = min(int(class_counts.min()), len(y), 10)
     if max_splits < 2:
         raise ValueError(
@@ -250,7 +277,7 @@ def _grid_search(
         param_grid=param_grid,
         cv=cv,
         scoring="roc_auc",
-        n_jobs=-1,
+        n_jobs=_max_parallel_jobs(),
         refit=True,
     )
     grid.fit(X, y)
@@ -280,6 +307,7 @@ def _train_generic_classifier(
     y: pd.Series,
     extra_hyperparameters: Iterable[str] = (),
     include_feature_importances: bool = False,
+    cv: Optional[StratifiedKFold] = None,
 ) -> Tuple[Dict[str, Any], Pipeline]:
     preprocessor = _build_preprocessor(X, feature_columns)
     pipeline = Pipeline(
@@ -288,7 +316,7 @@ def _train_generic_classifier(
             ("classifier", estimator),
         ]
     )
-    cv = _build_cv(y)
+    cv = cv or _build_cv(y)
     best_pipeline, best_params = _grid_search(pipeline, param_grid, X, y, cv)
     classifier = best_pipeline.named_steps["classifier"]
     hyperparameters = _format_hyperparameters(best_params, classifier, extras=extra_hyperparameters)
@@ -342,8 +370,11 @@ def _train_elastic_net(
 def _train_knn(
     X: pd.DataFrame, feature_columns: List[str], y: pd.Series
 ) -> Tuple[Dict[str, Any], Pipeline]:
+    cv = _build_cv(y)
     estimator = KNeighborsClassifier()
-    max_k = max(1, min(len(X) - 1, 25))
+    n_samples = len(X)
+    min_train_size = n_samples - math.ceil(n_samples / cv.get_n_splits())
+    max_k = max(1, min(min_train_size, n_samples - 1, 25))
     k_values = [k for k in range(1, max_k + 1, 2)]
     if not k_values:
         k_values = [1]
@@ -356,6 +387,7 @@ def _train_knn(
         feature_columns,
         y,
         extra_hyperparameters=("metric", "weights"),
+        cv=cv,
     )
 
 
@@ -592,7 +624,7 @@ def _train_voting_classifier(
     voting = VotingClassifier(
         estimators=estimators,
         voting="soft" if supports_soft else "hard",
-        n_jobs=-1,
+        n_jobs=1,
     )
     weight_grid = _generate_voting_weight_grid(len(estimators))
     if not weight_grid:
@@ -631,7 +663,7 @@ def _train_stacking_classifier(
         final_estimator=final_estimator,
         cv=stack_cv,
         passthrough=False,
-        n_jobs=-1,
+        n_jobs=1,
     )
     param_grid = {"classifier__final_estimator__C": [0.1, 1.0, 10.0]}
     return _train_generic_classifier(
@@ -688,6 +720,11 @@ def train_supervised_models(entry: DatasetEntry, models: List[str], svm_flexibil
         try:
             result, pipeline = trainer(X, feature_columns, y)
         except MissingDependencyError as exc:
+            results_with_order.append(
+                (model_order[model_name], _build_error_result(model_name, str(exc)))
+            )
+            continue
+        except ValueError as exc:
             results_with_order.append(
                 (model_order[model_name], _build_error_result(model_name, str(exc)))
             )
