@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+import math
+
 import re
 
 import numpy as np
@@ -158,6 +160,10 @@ def _build_preprocessor(df: pd.DataFrame, columns: List[str]) -> ColumnTransform
 
 def _build_cv(y: pd.Series) -> StratifiedKFold:
     class_counts = y.value_counts()
+    if class_counts.size < 2:
+        raise ValueError(
+            "Target column must contain at least two distinct classes (0 and 1) for supervised model training."
+        )
     max_splits = min(int(class_counts.min()), len(y), 10)
     if max_splits < 2:
         raise ValueError(
@@ -280,6 +286,7 @@ def _train_generic_classifier(
     y: pd.Series,
     extra_hyperparameters: Iterable[str] = (),
     include_feature_importances: bool = False,
+    cv: Optional[StratifiedKFold] = None,
 ) -> Tuple[Dict[str, Any], Pipeline]:
     preprocessor = _build_preprocessor(X, feature_columns)
     pipeline = Pipeline(
@@ -288,7 +295,7 @@ def _train_generic_classifier(
             ("classifier", estimator),
         ]
     )
-    cv = _build_cv(y)
+    cv = cv or _build_cv(y)
     best_pipeline, best_params = _grid_search(pipeline, param_grid, X, y, cv)
     classifier = best_pipeline.named_steps["classifier"]
     hyperparameters = _format_hyperparameters(best_params, classifier, extras=extra_hyperparameters)
@@ -342,8 +349,11 @@ def _train_elastic_net(
 def _train_knn(
     X: pd.DataFrame, feature_columns: List[str], y: pd.Series
 ) -> Tuple[Dict[str, Any], Pipeline]:
+    cv = _build_cv(y)
     estimator = KNeighborsClassifier()
-    max_k = max(1, min(len(X) - 1, 25))
+    n_samples = len(X)
+    min_train_size = n_samples - math.ceil(n_samples / cv.get_n_splits())
+    max_k = max(1, min(min_train_size, n_samples - 1, 25))
     k_values = [k for k in range(1, max_k + 1, 2)]
     if not k_values:
         k_values = [1]
@@ -356,6 +366,7 @@ def _train_knn(
         feature_columns,
         y,
         extra_hyperparameters=("metric", "weights"),
+        cv=cv,
     )
 
 
@@ -688,6 +699,11 @@ def train_supervised_models(entry: DatasetEntry, models: List[str], svm_flexibil
         try:
             result, pipeline = trainer(X, feature_columns, y)
         except MissingDependencyError as exc:
+            results_with_order.append(
+                (model_order[model_name], _build_error_result(model_name, str(exc)))
+            )
+            continue
+        except ValueError as exc:
             results_with_order.append(
                 (model_order[model_name], _build_error_result(model_name, str(exc)))
             )
