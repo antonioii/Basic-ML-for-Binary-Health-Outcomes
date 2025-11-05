@@ -12,31 +12,17 @@ interface TrainingConfigStepProps {
   onConfigComplete: (config: TrainingConfig) => void;
 }
 
-const SVM_MODEL_LABEL = "Support Vector Machine (SVM)";
-const KMEANS_MODEL_LABEL = "K-Means Clustering";
-
-const MODEL_OPTIONS = [
-  { label: "Logistic Regression", defaultSelected: true },
-  { label: "Elastic Net Logistic Regression", defaultSelected: false },
-  { label: "K-Nearest Neighbors (KNN)", defaultSelected: true },
-  { label: SVM_MODEL_LABEL, defaultSelected: true },
-  { label: "Naive Bayes (GaussianNB - no non-negative feature requirement)", defaultSelected: false },
-  { label: "Random Forest", defaultSelected: true },
-  { label: "Gradient Boosting", defaultSelected: true },
-  { label: "XGBoost Classifier", defaultSelected: false },
-  { label: "LightGBM Classifier", defaultSelected: false },
-  { label: "CatBoost Classifier", defaultSelected: false },
-  { label: "Voting Classifier", defaultSelected: false },
-  { label: "Stacking Classifier", defaultSelected: false },
-  { label: KMEANS_MODEL_LABEL, defaultSelected: true },
+const MODELS = [
+  "Logistic Regression",
+  "K-Nearest Neighbors (KNN)",
+  "Support Vector Machine (SVM)",
+  "Random Forest",
+  "Gradient Boosting",
+  "K-Means Clustering"
 ];
 
-const DEFAULT_SELECTED_MODELS = MODEL_OPTIONS
-  .filter(option => option.defaultSelected)
-  .map(option => option.label);
-
 const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConfigComplete }) => {
-  const [selectedModels, setSelectedModels] = useState<string[]>(DEFAULT_SELECTED_MODELS);
+  const [selectedModels, setSelectedModels] = useState<string[]>(MODELS);
   const [svmFlexibility, setSvmFlexibility] = useState<SvmFlexibility>(SvmFlexibility.MEDIUM);
   
   const [elbowData, setElbowData] = useState<{ k: number; inertia: number }[]>([]);
@@ -106,16 +92,16 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
         <div>
           <h3 className="text-lg font-semibold text-gray-800 mb-4">Select Models</h3>
           <div className="space-y-3">
-            {MODEL_OPTIONS.map(({ label }) => (
-              <div key={label} className="flex items-center bg-gray-50 p-3 rounded-lg border">
+            {MODELS.map(model => (
+              <div key={model} className="flex items-center bg-gray-50 p-3 rounded-lg border">
                 <input
                   type="checkbox"
-                  id={label}
-                  checked={selectedModels.includes(label)}
-                  onChange={() => handleModelToggle(label)}
+                  id={model}
+                  checked={selectedModels.includes(model)}
+                  onChange={() => handleModelToggle(model)}
                   className="h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
-                <label htmlFor={label} className="ml-3 text-sm font-medium text-gray-800 cursor-pointer">{label}</label>
+                <label htmlFor={model} className="ml-3 text-sm font-medium text-gray-800 cursor-pointer">{model}</label>
               </div>
             ))}
           </div>
@@ -134,9 +120,9 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
                     checked={svmFlexibility === level}
                     onChange={() => setSvmFlexibility(level)}
                     className="h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
-                    disabled={!selectedModels.includes(SVM_MODEL_LABEL)}
+                    disabled={!selectedModels.includes("Support Vector Machine (SVM)")}
                   />
-                  <span className={`ml-3 text-sm font-medium ${!selectedModels.includes(SVM_MODEL_LABEL) ? 'text-gray-400' : 'text-gray-700'}`}>{level}</span>
+                  <span className={`ml-3 text-sm font-medium ${!selectedModels.includes("Support Vector Machine (SVM)") ? 'text-gray-400' : 'text-gray-700'}`}>{level}</span>
                 </label>
               ))}
             </div>
@@ -178,7 +164,7 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
                   min="2"
                   max="10"
                   className="mt-1 block w-full rounded-md border-gray-300 bg-gray-50 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2"
-                  disabled={!selectedModels.includes(KMEANS_MODEL_LABEL) || elbowData.length === 0}
+                  disabled={!selectedModels.includes("K-Means Clustering") || elbowData.length === 0}
                 />
             </div>
           </div>
