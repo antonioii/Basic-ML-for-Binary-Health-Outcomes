@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-import re
-
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
@@ -535,8 +533,7 @@ def _build_error_result(name: str, message: str) -> Dict[str, Any]:
 
 
 def _unique_estimator_name(base: str, existing: set[str]) -> str:
-    slug_raw = "".join(ch if ch.isalnum() else "_" for ch in base.lower())
-    slug = re.sub(r"_+", "_", slug_raw).strip("_") or "estimator"
+    slug = "".join(ch if ch.isalnum() else "_" for ch in base.lower()).strip("_") or "estimator"
     candidate = slug
     index = 1
     while candidate in existing:
