@@ -6,8 +6,6 @@ import math
 
 import re
 
-import os
-
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
@@ -55,25 +53,6 @@ except ImportError:  # pragma: no cover - optional dependency
     CatBoostClassifier = None  # type: ignore
 
 RANDOM_STATE = 42
-
-
-def _max_parallel_jobs() -> int:
-    """Return a conservative number of parallel workers.
-
-    The training step runs inside the web API process, so aggressively using all
-    available CPU cores can easily exhaust memory – especially on Windows where
-    joblib spawns fresh interpreter processes.  When that happens the operating
-    system terminates the backend process and the frontend surfaces a generic
-    "Failed to fetch" error.  Limiting the worker pool keeps resource usage
-    predictable while still allowing moderate parallelism on larger machines.
-    """
-
-    cpu_count = os.cpu_count() or 1
-    if cpu_count <= 2:
-        return 1
-    if cpu_count <= 4:
-        return 2
-    return min(4, cpu_count // 2)
 
 
 class MissingDependencyError(RuntimeError):
@@ -277,7 +256,7 @@ def _grid_search(
         param_grid=param_grid,
         cv=cv,
         scoring="roc_auc",
-        n_jobs=_max_parallel_jobs(),
+        n_jobs=-1,
         refit=True,
     )
     grid.fit(X, y)
@@ -624,7 +603,7 @@ def _train_voting_classifier(
     voting = VotingClassifier(
         estimators=estimators,
         voting="soft" if supports_soft else "hard",
-        n_jobs=1,
+        n_jobs=-1,
     )
     weight_grid = _generate_voting_weight_grid(len(estimators))
     if not weight_grid:
@@ -663,7 +642,7 @@ def _train_stacking_classifier(
         final_estimator=final_estimator,
         cv=stack_cv,
         passthrough=False,
-        n_jobs=1,
+        n_jobs=-1,
     )
     param_grid = {"classifier__final_estimator__C": [0.1, 1.0, 10.0]}
     return _train_generic_classifier(
