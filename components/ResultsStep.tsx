@@ -35,6 +35,25 @@ const ConfusionMatrixDisplay: React.FC<{ cm: ModelMetrics['confusionMatrix'] }> 
     </div>
 );
 
+// helper function to find the correct <svg> graphic
+function getMainChartSvg(root: HTMLElement): SVGSVGElement | null {
+  const svgs = Array.from(root.querySelectorAll('svg')) as SVGSVGElement[];
+  if (svgs.length === 0) return null;
+
+  // 1) Choose svg with role="application"
+  const withRole = svgs.find(s => s.getAttribute('role') === 'application');
+  if (withRole) return withRole;
+
+  // 2) fallback: larger SVG in visible area
+  let best: { el: SVGSVGElement; area: number } | null = null;
+  for (const s of svgs) {
+    const rect = s.getBoundingClientRect();
+    const area = rect.width * rect.height;
+    if (!best || area > best.area) best = { el: s, area };
+  }
+  return best?.el ?? null;
+}
+
 const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, results, onResultsComplete, onRestart }) => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('comparison');
@@ -96,69 +115,82 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
       .join(' | ');
   }, []);
 
-  const handleDownloadRocSvg = useCallback(() => {
-    if (!rocContainerRef.current) return;
-    const svg =
-      rocContainerRef.current.querySelector('.recharts-wrapper svg') ??
-      rocContainerRef.current.querySelector('svg');
-    if (!svg) return;
-    const serializer = new XMLSerializer();
-    let source = serializer.serializeToString(svg);
-    if (!source.includes('xmlns="http://www.w3.org/2000/svg"')) {
-      source = source.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+const handleDownloadRocSvg = useCallback(() => {
+  if (!rocContainerRef.current) return;
+  const svg = getMainChartSvg(rocContainerRef.current);
+  if (!svg) return;
+
+  const serializer = new XMLSerializer();
+  let source = serializer.serializeToString(svg);
+
+  if (!source.includes('xmlns="http://www.w3.org/2000/svg"')) {
+    source = source.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+
+  const blob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'roc_curve.svg';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}, []);
+
+const handleDownloadRocPng = useCallback(() => {
+  if (!rocContainerRef.current) return;
+  const svg = getMainChartSvg(rocContainerRef.current);
+  if (!svg) return;
+
+  const serializer = new XMLSerializer();
+  let source = serializer.serializeToString(svg);
+
+  if (!source.includes('xmlns="http://www.w3.org/2000/svg"')) {
+    source = source.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+
+  const svgBlob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(svgBlob);
+
+  const image = new Image();
+  image.crossOrigin = 'anonymous';
+  image.onload = () => {
+    const rect = svg.getBoundingClientRect();
+    const scale = window.devicePixelRatio || 1;
+
+    const canvas = document.createElement('canvas');
+    canvas.width  = Math.max(1, Math.round(rect.width  * scale));
+    canvas.height = Math.max(1, Math.round(rect.height * scale));
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      URL.revokeObjectURL(url);
+      return;
     }
-    const blob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
+
+    // fundo branco para não ficar transparente
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // desenha escalado
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.drawImage(image, 0, 0, rect.width, rect.height);
+
+    const pngUrl = canvas.toDataURL('image/png');
     const link = document.createElement('a');
-    link.href = url;
-    link.download = 'roc_curve.svg';
+    link.href = pngUrl;
+    link.download = 'roc_curve.png';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  }, []);
 
-  const handleDownloadRocPng = useCallback(() => {
-    if (!rocContainerRef.current) return;
-    const svg =
-      rocContainerRef.current.querySelector('.recharts-wrapper svg') ??
-      rocContainerRef.current.querySelector('svg');
-    if (!svg) return;
-    const serializer = new XMLSerializer();
-    let source = serializer.serializeToString(svg);
-    if (!source.includes('xmlns="http://www.w3.org/2000/svg"')) {
-      source = source.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
-    }
-    const svgBlob = new Blob([source], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(svgBlob);
-    const image = new Image();
-    image.onload = () => {
-      const rect = svg.getBoundingClientRect();
-      const scale = window.devicePixelRatio || 1;
-      const canvas = document.createElement('canvas');
-      canvas.width = rect.width * scale;
-      canvas.height = rect.height * scale;
-      const context = canvas.getContext('2d');
-      if (!context) {
-        URL.revokeObjectURL(url);
-        return;
-      }
-      context.setTransform(scale, 0, 0, scale, 0, 0);
-      context.drawImage(image, 0, 0, rect.width, rect.height);
-      const pngUrl = canvas.toDataURL('image/png');
-      const link = document.createElement('a');
-      link.href = pngUrl;
-      link.download = 'roc_curve.png';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-    };
-    image.src = url;
-  }, []);
+    URL.revokeObjectURL(url);
+  };
+  image.onerror = () => URL.revokeObjectURL(url);
+  image.src = url;
+}, []);
+
 
   if (loading) {
     return (
