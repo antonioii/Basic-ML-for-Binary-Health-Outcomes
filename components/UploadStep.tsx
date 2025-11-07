@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { DataSet, DataRow } from '../types';
 import { UploadCloud, FileCheck2, AlertTriangle } from 'lucide-react';
 import Spinner from './common/Spinner';
@@ -16,9 +16,10 @@ const UploadStep: React.FC<UploadStepProps> = ({ onDataUploaded }) => {
   const [loading, setLoading] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [dataSetPreview, setDataSetPreview] = useState<DataRow[] | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounter = useRef(0);
 
-  const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  const processFile = useCallback(async (file: File) => {
     if (!file) return;
 
     setLoading(true);
@@ -38,13 +39,59 @@ const UploadStep: React.FC<UploadStepProps> = ({ onDataUploaded }) => {
     }
   }, [onDataUploaded]);
 
+  const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    await processFile(file);
+  }, [processFile]);
+
+  const handleDragEnter = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (loading) return;
+    dragCounter.current += 1;
+    setIsDragging(true);
+  }, [loading]);
+
+  const handleDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (loading) return;
+    dragCounter.current = Math.max(dragCounter.current - 1, 0);
+    if (dragCounter.current === 0) {
+      setIsDragging(false);
+    }
+  }, [loading]);
+
+  const handleDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback(async (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (loading) return;
+    setIsDragging(false);
+    dragCounter.current = 0;
+    const file = event.dataTransfer.files?.[0];
+    if (!file) return;
+    await processFile(file);
+  }, [loading, processFile]);
+
   return (
     <Card>
       <div className="text-center">
         <h2 className="text-2xl font-bold text-gray-800 mb-2">Upload Your Dataset</h2>
         <p className="text-gray-600 mb-6">Select a pre-processed database file to begin the analysis.</p>
         
-        <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 hover:border-blue-500 transition-colors duration-300 bg-gray-50">
+        <div
+          className={`border-2 border-dashed rounded-lg p-8 transition-colors duration-300 ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-gray-50 hover:border-blue-500'}`}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
           <input
             type="file"
             id="file-upload"
