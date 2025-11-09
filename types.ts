@@ -1,4 +1,8 @@
 
+export interface ClassDistribution {
+  [label: string]: number;
+}
+
 export type DataValue = string | number | null;
 export type DataRow = Record<string, DataValue>;
 
@@ -11,6 +15,7 @@ export interface DataSet {
   targetColumn: string;
   featureColumns: string[];
   preview: DataRow[];
+  classDistribution?: ClassDistribution;
 }
 
 export enum AppStep {

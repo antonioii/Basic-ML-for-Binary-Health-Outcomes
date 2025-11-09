@@ -587,7 +587,7 @@ class App(tk.Tk):
 
         system_frame = ttk.LabelFrame(
             self.frame_main,
-            text="Sistema operacional de destino"
+            text="Sistema operacional:"
         )
         system_frame.pack(fill="x", pady=(10, 10))
         win_radio = ttk.Radiobutton(

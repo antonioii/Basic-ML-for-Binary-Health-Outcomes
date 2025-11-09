@@ -25,6 +25,7 @@ class DatasetResponse(BaseModel):
     targetColumn: str = Field(..., alias='target_column')
     featureColumns: List[str] = Field(..., alias='feature_columns')
     preview: List[Dict[str, DataValue]]
+    classDistribution: Dict[str, int] = Field(..., alias='class_distribution')
 
     class Config:
         allow_population_by_field_name = True

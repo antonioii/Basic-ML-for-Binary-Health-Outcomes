@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { DataSet, TrainingConfig, ModelResult, ModelMetrics } from '../types';
 import { trainModels } from '../services/mlService';
 import { generateSummary } from '../services/geminiService';
+import { buildTrainingEstimate, formatTrainingTime } from '../services/trainingEstimator';
 import Card from './common/Card';
 import Button from './common/Button';
 import Spinner from './common/Spinner';
@@ -18,48 +19,6 @@ interface ResultsStepProps {
 }
 
 const colors = ["#8884d8", "#82ca9d", "#ffc658", "#ff8042", "#0088FE", "#00C49F"];
-
-const MODEL_COMPLEXITY_WEIGHTS: Record<string, number> = {
-  'Logistic Regression': 1,
-  'Elastic Net (Logistic Regression)': 1.2,
-  'K-Nearest Neighbors (KNN)': 1.3,
-  'Support Vector Machine (SVM)': 1.7,
-  'Random Forest': 1.5,
-  'Gradient Boosting': 1.6,
-  'XGBoost': 1.8,
-  'LightGBM': 1.5,
-  'CatBoost': 1.9,
-  'Naive Bayes (Gaussian)': 0.8,
-  'Voting Classifier': 1.4,
-  'Stacking Classifier': 1.6,
-  'K-Means Clustering': 0.9,
-};
-
-const estimateTrainingTimeSeconds = (dataSet: DataSet, config: TrainingConfig): number => {
-  if (!config?.models?.length) return 0;
-  const rows = Math.max(1, dataSet.rows);
-  const features = Math.max(1, dataSet.featureColumns.length);
-  const rowFactor = Math.log10(rows + 10);
-  const featureFactor = 1 + Math.log10(features + 1) * 0.6;
-  const foldsEstimate = Math.min(10, Math.max(2, Math.round(rowFactor * 2.5)));
-  const workload = config.models.reduce((total, model) => total + (MODEL_COMPLEXITY_WEIGHTS[model] ?? 1), 0);
-  const seconds = rowFactor * featureFactor * foldsEstimate * workload * 2.2;
-  return Math.max(5, Math.min(1800, Math.round(seconds)));
-};
-
-const formatTrainingTime = (seconds: number): string => {
-  if (seconds <= 0) {
-    return 'a few seconds';
-  }
-  if (seconds < 60) {
-    return `${seconds}s`;
-  }
-  if (seconds < 3600) {
-    const minutes = seconds / 60;
-    return `${minutes >= 10 ? minutes.toFixed(0) : minutes.toFixed(1)} min`;
-  }
-  return `${(seconds / 3600).toFixed(1)} h`;
-};
 
 const MetricCard: React.FC<{ title: string, value: string | number }> = ({ title, value }) => (
     <div className="bg-gray-50 p-3 rounded-lg text-center border">
@@ -102,9 +61,10 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
   const [geminiSummary, setGeminiSummary] = useState('');
   const [geminiLoading, setGeminiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeStageIndex, setActiveStageIndex] = useState(0);
   const rocContainerRef = useRef<HTMLDivElement | null>(null);
-  const estimatedSeconds = useMemo(() => estimateTrainingTimeSeconds(dataSet, trainingConfig), [dataSet, trainingConfig]);
-  const formattedEstimate = useMemo(() => formatTrainingTime(estimatedSeconds), [estimatedSeconds]);
+  const trainingEstimate = useMemo(() => buildTrainingEstimate(dataSet, trainingConfig), [dataSet, trainingConfig]);
+  const formattedEstimate = useMemo(() => formatTrainingTime(trainingEstimate.totalSeconds), [trainingEstimate.totalSeconds]);
 
   useEffect(() => {
     if(!results){
@@ -126,6 +86,39 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!loading || trainingEstimate.stages.length === 0) {
+      return;
+    }
+    setActiveStageIndex(0);
+    const start = performance.now();
+    const interval = window.setInterval(() => {
+      const elapsedSeconds = (performance.now() - start) / 1000;
+      let cumulative = 0;
+      let currentIndex = trainingEstimate.stages.length - 1;
+      for (let i = 0; i < trainingEstimate.stages.length; i++) {
+        cumulative += trainingEstimate.stages[i].seconds;
+        if (elapsedSeconds < cumulative) {
+          currentIndex = i;
+          break;
+        }
+      }
+      setActiveStageIndex(currentIndex);
+    }, 400);
+    return () => window.clearInterval(interval);
+  }, [loading, trainingEstimate]);
+
+  const stageCount = trainingEstimate.stages.length;
+  const currentStage = stageCount > 0
+    ? trainingEstimate.stages[Math.min(activeStageIndex, stageCount - 1)]
+    : null;
+
+  useEffect(() => {
+    if (!loading && stageCount > 0) {
+      setActiveStageIndex(stageCount - 1);
+    }
+  }, [loading, stageCount]);
 
   const handleGenerateSummary = async () => {
     if (!results) return;
@@ -249,6 +242,11 @@ const handleDownloadRocPng = useCallback(() => {
           <p className="text-sm text-gray-500 mt-2">
             Estimated completion: <span className="font-semibold text-gray-700">~{formattedEstimate}</span>
           </p>
+          {currentStage && (
+            <p className="text-sm text-blue-600 mt-1 text-center">
+              Stage {Math.min(activeStageIndex + 1, stageCount)} of {stageCount}: <span className="font-semibold text-blue-700">{currentStage.label}</span>
+            </p>
+          )}
         </div>
       </Card>
     );

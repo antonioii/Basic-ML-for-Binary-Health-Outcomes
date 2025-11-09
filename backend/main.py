@@ -24,6 +24,7 @@ from .schemas import (
 from .services.cleaning import apply_cleaning
 from .services.eda import perform_eda
 from .services.training import CLASSIFIER_NAMES, compute_kmeans_elbow, train_models
+from .utils.datasets import build_dataset_payload
 
 
 app = FastAPI(title='Health ML Pipeline API', version='1.0.0')
@@ -101,16 +102,7 @@ async def upload_dataset(file: UploadFile = File(...)) -> DatasetResponse:
     finally:
         await file.close()
 
-    response = DatasetResponse(
-        dataset_id=entry.dataset_id,
-        file_name=entry.file_name,
-        rows=int(entry.raw_df.shape[0]),
-        cols=int(entry.raw_df.shape[1]),
-        id_column=entry.id_column,
-        target_column=entry.target_column,
-        feature_columns=entry.feature_columns,
-        preview=entry.raw_df.head(10).to_dict(orient='records'),
-    )
+    response = DatasetResponse(**build_dataset_payload(entry, entry.raw_df))
     return response
 
 

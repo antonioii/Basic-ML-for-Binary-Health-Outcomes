@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Dict, Iterable, List, Set
 
 from ..dataset_store import DatasetEntry
+from ..utils.datasets import build_dataset_payload
 
 
 def _to_set(values: Iterable) -> Set:
@@ -57,18 +58,7 @@ def apply_cleaning(entry: DatasetEntry, suggestion_ids: List[str]) -> Dict:
     elif removed_columns:
         summary['notes'] = 'Removed highly correlated columns based on selected suggestions.'
 
-    dataset_payload = {
-        'dataset_id': entry.dataset_id,
-        'file_name': entry.file_name,
-        'rows': int(df.shape[0]),
-        'cols': int(df.shape[1]),
-        'id_column': entry.id_column,
-        'target_column': entry.target_column,
-        'feature_columns': current_features,
-        'preview': df.head(10).to_dict(orient='records'),
-    }
-
     return {
-        'cleaned_dataset': dataset_payload,
+        'cleaned_dataset': build_dataset_payload(entry, df),
         'summary': summary,
     }
