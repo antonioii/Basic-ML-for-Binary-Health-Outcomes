@@ -111,6 +111,28 @@ O launcher cria automaticamente o ambiente virtual, instala dependências do **F
 
 Então abre o navegador após 30 segundos dos servidores rodando já com a interface gráfica pronta para uso. Após o uso do programa, o usuário deve clicar em "End application" no laucher.
 
+---
+
+## Running Locally (Linux - Ubuntu or Windows Subsystem for Linux .:WSL.: )
+
+O launcher também roda em Ubuntu (ou derivados) desde que os requisitos abaixo estejam configurados.
+
+**Pré-requisitos:**  
+- Python 3.11 ou superior instalado (`python3 --version`)  
+- Biblioteca Tkinter disponível para o Python do sistema (`sudo apt update && sudo apt install python3-tk`)
+
+**Passo-a-passo:**
+
+1. **Baixe o repositório**  
+   Igual ao Windows: clique em **"Code → Download ZIP"**, extraia o conteúdo para uma pasta local.
+
+2. **Execute o Launcher**  
+   Abra um terminal na pasta extraída, garanta que o ambiente gráfico esteja disponível e execute:
+   ```
+   python3 launcher.py
+   ```
+   O launcher fará a mesma automação do Windows (criação do ambiente virtual, instalação das dependências do backend/frontend e abertura do navegador). Mantenha a janela aberta até finalizar e encerre pelo botão “End application” ao terminar.
+
 
 ---
 
@@ -171,6 +193,24 @@ Caso essas bibliotecas não estejam instaladas, o backend mostra uma mensagem no
 4. **Rodar frontend (`npm run dev`)**  
 5. **Fazer upload do dataset e seguir o pipeline**  
 6. **Usar interpretação Gemini se desejado**
+
+---
+
+## Modelos disponíveis para treinamento
+
+- Logistic Regression  
+- Elastic Net (Logistic Regression)  
+- K-Nearest Neighbors (KNN)  
+- Support Vector Machine (SVM) com presets Low/Medium/High  
+- Random Forest  
+- Gradient Boosting  
+- XGBoost  
+- LightGBM  
+- CatBoost  
+- Gaussian Naive Bayes  
+- Voting Classifier (hard/soft, quando ≥2 modelos base treinados)  
+- Stacking Classifier (Logistic Regression como meta-modelo)  
+- K-Means Clustering (elbow + clusters)
 
 ---
 
