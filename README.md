@@ -33,10 +33,11 @@ Atualmente o programa exige datasets em formato **Excel (.xlsx)** conforme as re
 
 Exemplo simplificado:
 
-| ID | idade | pressao | glicose | sexo_M | sexo_F | desfecho |
-|----|--------|----------|----------|---------|---------|-----------|
-| 1 | 67 | 132 | 95 | 1 | 0 | 1 |
-| 2 | 74 | 141 | 103 | 0 | 1 | 0 |
+| ID | idade | pressao | glicose | Atividade_física_Sedentario | Atividade_física_Ativo | Atividade_física_Moderada | Desfecho |
+|----|--------|----------|----------|---------|---------|-----------|-----------|
+| 1 | 67 | 132 | 95 | 1 | 0 | 0 | 1 |
+| 2 | 74 | 141 | 103 | 0 | 1 | 0 | 0 |
+| 3 | 76 | 121 | 93 | 0 | 0 | 1 | 0 |
 
 ---
 
