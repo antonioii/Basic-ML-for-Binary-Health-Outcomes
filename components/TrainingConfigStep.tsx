@@ -12,17 +12,33 @@ interface TrainingConfigStepProps {
   onConfigComplete: (config: TrainingConfig) => void;
 }
 
-const MODELS = [
-  "Logistic Regression",
-  "K-Nearest Neighbors (KNN)",
-  "Support Vector Machine (SVM)",
-  "Random Forest",
-  "Gradient Boosting",
-  "K-Means Clustering"
+interface ModelOption {
+  value: string;
+  label: string;
+  helper?: string;
+  defaultSelected?: boolean;
+}
+
+const MODEL_OPTIONS: ModelOption[] = [
+  { value: "Logistic Regression", label: "Logistic Regression", defaultSelected: true },
+  { value: "Elastic Net (Logistic Regression)", label: "Elastic Net (Logistic Regression)", helper: "Uses saga solver with elastic net penalty" },
+  { value: "K-Nearest Neighbors (KNN)", label: "K-Nearest Neighbors (KNN)", defaultSelected: true },
+  { value: "Support Vector Machine (SVM)", label: "Support Vector Machine (SVM)", defaultSelected: true },
+  { value: "Random Forest", label: "Random Forest", defaultSelected: true },
+  { value: "Gradient Boosting", label: "Gradient Boosting", defaultSelected: true },
+  { value: "XGBoost", label: "XGBoost", helper: "Pré-instalado pelo launcher (pacote `xgboost`)" },
+  { value: "LightGBM", label: "LightGBM", helper: "Pré-instalado pelo launcher (pacote `lightgbm`)" },
+  { value: "CatBoost", label: "CatBoost", helper: "Pré-instalado pelo launcher (pacote `catboost`)" },
+  { value: "Naive Bayes (Gaussian)", label: "Naive Bayes (Gaussian)", helper: "Gaussian NB accepts negative features; no non-negative restriction" },
+  { value: "Voting Classifier", label: "Voting Classifier", helper: "Requires ≥ 2 trained supervised models" },
+  { value: "Stacking Classifier", label: "Stacking Classifier", helper: "Requires ≥ 2 trained supervised models" },
+  { value: "K-Means Clustering", label: "K-Means Clustering", defaultSelected: true },
 ];
 
+const DEFAULT_SELECTED_MODELS = MODEL_OPTIONS.filter(option => option.defaultSelected).map(option => option.value);
+
 const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConfigComplete }) => {
-  const [selectedModels, setSelectedModels] = useState<string[]>(MODELS);
+  const [selectedModels, setSelectedModels] = useState<string[]>(DEFAULT_SELECTED_MODELS);
   const [svmFlexibility, setSvmFlexibility] = useState<SvmFlexibility>(SvmFlexibility.MEDIUM);
   
   const [elbowData, setElbowData] = useState<{ k: number; inertia: number }[]>([]);
@@ -92,16 +108,19 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
         <div>
           <h3 className="text-lg font-semibold text-gray-800 mb-4">Select Models</h3>
           <div className="space-y-3">
-            {MODELS.map(model => (
-              <div key={model} className="flex items-center bg-gray-50 p-3 rounded-lg border">
+            {MODEL_OPTIONS.map(option => (
+              <div key={option.value} className="flex items-start bg-gray-50 p-3 rounded-lg border">
                 <input
                   type="checkbox"
-                  id={model}
-                  checked={selectedModels.includes(model)}
-                  onChange={() => handleModelToggle(model)}
+                  id={option.value}
+                  checked={selectedModels.includes(option.value)}
+                  onChange={() => handleModelToggle(option.value)}
                   className="h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
-                <label htmlFor={model} className="ml-3 text-sm font-medium text-gray-800 cursor-pointer">{model}</label>
+                <label htmlFor={option.value} className="ml-3 text-sm text-gray-800 cursor-pointer flex-1">
+                  <span className="font-medium">{option.label}</span>
+                  {option.helper && <span className="block text-xs text-gray-500 mt-1">{option.helper}</span>}
+                </label>
               </div>
             ))}
           </div>

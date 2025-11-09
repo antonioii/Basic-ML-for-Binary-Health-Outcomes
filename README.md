@@ -58,10 +58,10 @@ O fluxo de trabalho foi desenhado para que o profissional de saúde possa realiz
    Com base nas sugestões automáticas (missing, outliers, checagem pareada de multicolinearidade), é possível limpar o dataset via interface.
 
 4. **Seleção de modelos**  
-   Usuário escolhe os algoritmos a testar (atualmente disponíveis apenas os mais básicos como **Logistic Regression, KNN, SVM, Random Forest, Gradient Boosting, K-Means**) e define alguns parâmetros (valor de K, Clusters e checagem de acotovelamento no K-MEANS). Em cada família de modelo, o programa testa de forma sequencial diversos hiperparametros para encontrar aquele com melhor desempenho (baseado em área sob a curva ROC e F1-score). 
+   Usuário escolhe os algoritmos a testar (Logistic Regression, Elastic Net, KNN, SVM, Random Forest, Gradient Boosting, XGBoost, LightGBM, CatBoost, Naive Bayes, Voting/Stacking ensembles e K-Means). Em cada família de modelo, o programa testa de forma sequencial diversos hiperparâmetros para encontrar aquele com melhor desempenho (baseado em área sob a curva ROC e F1-score). O launcher instala todas as dependências necessárias (inclusive XGBoost, LightGBM e CatBoost) antes de abrir o navegador, garantindo que os boosters estejam prontos para uso; se você executar o backend manualmente fora do launcher, o sistema continuará exibindo mensagens claras caso alguma dessas bibliotecas não esteja disponível.
 
 5. **Treinamento automatizado**  
-   São treinados modelos de machine learning, em seguido são geradas métricas como *AUC*, *sensibilidade/especificidade*, *F1-score*, *acurácia*, *ROC curves*, *confusion matrix* e *feature importances* para comparação.
+   São treinados modelos de machine learning, em seguido são geradas métricas como *AUC*, *sensibilidade/especificidade*, *F1-score*, *acurácia*, *ROC curves*, *confusion matrix* e *feature importances* para comparação. A tela de treinamento exibe uma estimativa de tempo baseada no tamanho do dataset e nos modelos selecionados, ajudando a planejar execuções mais pesadas.
 
 6. **Resultados e download**  
    Relatórios e modelos otimizados podem ser baixados junto dos valores dos hiperparâmetros de melhor desempenho.
@@ -148,6 +148,15 @@ Então abre o navegador após 30 segundos dos servidores rodando já com a inter
 VITE_API_URL=http://localhost:8000/api
 GEMINI_API_KEY=your-gemini-api-key
 ```
+
+### Modelos avançados (dependências extras)
+
+O launcher já instala automaticamente `xgboost`, `lightgbm` e `catboost` a partir de `backend/requirements.txt`, então os boosters ficam habilitados por padrão. Se estiver rodando o backend sem o launcher (por exemplo, em um ambiente customizado), execute:
+```
+pip install xgboost lightgbm catboost
+```
+
+Caso essas bibliotecas não estejam instaladas, o backend mostra uma mensagem no resultado do modelo e continua treinando os demais algoritmos normalmente.
 
 - `VITE_API_URL`: endereço do backend (local ou remoto)  
 - `GEMINI_API_KEY`: chave gratuita obtida em [Google AI Studio](https://aistudio.google.com/app/apikey)

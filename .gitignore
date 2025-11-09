@@ -10,7 +10,14 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+package-lock.json
 *.local
+.env
+.env.*
+.frontend_deps_ready
+.venv/
+__pycache__/
+*.pyc
 
 # Editor directories and files
 .vscode/*

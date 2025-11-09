@@ -573,7 +573,7 @@ class App(tk.Tk):
         ttk.Label(
             self.frame_main,
             text="Insira sua GEMINI_API_KEY (opcional) e clique em Start.\n"
-                 "O app abrirá no navegador ao final, no primeiro uso pode demorar alguns minutos!",
+                 "O app abrirá no navegador ao final.\n No primeiro uso pode demorar alguns minutos!",
             justify="center"
         ).pack(pady=(0, 20))
 

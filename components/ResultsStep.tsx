@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { DataSet, TrainingConfig, ModelResult, ModelMetrics } from '../types';
 import { trainModels } from '../services/mlService';
 import { generateSummary } from '../services/geminiService';
@@ -18,6 +18,48 @@ interface ResultsStepProps {
 }
 
 const colors = ["#8884d8", "#82ca9d", "#ffc658", "#ff8042", "#0088FE", "#00C49F"];
+
+const MODEL_COMPLEXITY_WEIGHTS: Record<string, number> = {
+  'Logistic Regression': 1,
+  'Elastic Net (Logistic Regression)': 1.2,
+  'K-Nearest Neighbors (KNN)': 1.3,
+  'Support Vector Machine (SVM)': 1.7,
+  'Random Forest': 1.5,
+  'Gradient Boosting': 1.6,
+  'XGBoost': 1.8,
+  'LightGBM': 1.5,
+  'CatBoost': 1.9,
+  'Naive Bayes (Gaussian)': 0.8,
+  'Voting Classifier': 1.4,
+  'Stacking Classifier': 1.6,
+  'K-Means Clustering': 0.9,
+};
+
+const estimateTrainingTimeSeconds = (dataSet: DataSet, config: TrainingConfig): number => {
+  if (!config?.models?.length) return 0;
+  const rows = Math.max(1, dataSet.rows);
+  const features = Math.max(1, dataSet.featureColumns.length);
+  const rowFactor = Math.log10(rows + 10);
+  const featureFactor = 1 + Math.log10(features + 1) * 0.6;
+  const foldsEstimate = Math.min(10, Math.max(2, Math.round(rowFactor * 2.5)));
+  const workload = config.models.reduce((total, model) => total + (MODEL_COMPLEXITY_WEIGHTS[model] ?? 1), 0);
+  const seconds = rowFactor * featureFactor * foldsEstimate * workload * 2.2;
+  return Math.max(5, Math.min(1800, Math.round(seconds)));
+};
+
+const formatTrainingTime = (seconds: number): string => {
+  if (seconds <= 0) {
+    return 'a few seconds';
+  }
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  if (seconds < 3600) {
+    const minutes = seconds / 60;
+    return `${minutes >= 10 ? minutes.toFixed(0) : minutes.toFixed(1)} min`;
+  }
+  return `${(seconds / 3600).toFixed(1)} h`;
+};
 
 const MetricCard: React.FC<{ title: string, value: string | number }> = ({ title, value }) => (
     <div className="bg-gray-50 p-3 rounded-lg text-center border">
@@ -61,6 +103,8 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
   const [geminiLoading, setGeminiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const rocContainerRef = useRef<HTMLDivElement | null>(null);
+  const estimatedSeconds = useMemo(() => estimateTrainingTimeSeconds(dataSet, trainingConfig), [dataSet, trainingConfig]);
+  const formattedEstimate = useMemo(() => formatTrainingTime(estimatedSeconds), [estimatedSeconds]);
 
   useEffect(() => {
     if(!results){
@@ -100,9 +144,12 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
 
   const getBestModel = useCallback(() => {
     if (!results) return null;
-    return results
-      .filter(r => r.metrics?.auc)
-      .reduce((best, current) => (current.metrics!.auc > best.metrics!.auc ? current : best), results[0]);
+    const candidates = results.filter(r => r.metrics?.auc);
+    if (candidates.length === 0) return null;
+    return candidates.slice(1).reduce(
+      (best, current) => (current.metrics!.auc > best.metrics!.auc ? current : best),
+      candidates[0],
+    );
   }, [results]);
 
   const formatHyperparameters = useCallback((params: ModelResult['hyperparameters']) => {
@@ -198,7 +245,10 @@ const handleDownloadRocPng = useCallback(() => {
         <div className="flex flex-col items-center justify-center h-80">
           <Spinner />
           <p className="mt-4 text-lg font-medium text-gray-700">Training Models...</p>
-          <p className="text-gray-500">This may take a moment. We're running cross-validation for robust results.</p>
+          <p className="text-gray-500 text-center px-4">This may take a moment. We're running cross-validation for robust results.</p>
+          <p className="text-sm text-gray-500 mt-2">
+            Estimated completion: <span className="font-semibold text-gray-700">~{formattedEstimate}</span>
+          </p>
         </div>
       </Card>
     );
@@ -212,7 +262,8 @@ const handleDownloadRocPng = useCallback(() => {
     return <Card><p className="text-center text-red-500">Failed to get model results.</p></Card>;
   }
   
-  const supervisedResults = results.filter(r => r.metrics);
+  const supervisedResults = results.filter(r => r.name !== 'K-Means Clustering');
+  const rocEligibleResults = supervisedResults.filter(r => r.metrics && r.rocCurve);
   const kMeansResult = results.find(r => r.name === 'K-Means Clustering')?.kMeansResult;
 
   const renderComparisonTable = () => (
@@ -220,19 +271,20 @@ const handleDownloadRocPng = useCallback(() => {
         {supervisedResults.map((result) => (
             <Card key={result.name}>
                  <h3 className="text-xl font-bold text-gray-800 mb-4">{result.name}</h3>
-                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                 {result.metrics ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="lg:col-span-1">
                         <h4 className="text-sm font-semibold mb-2 text-center">Confusion Matrix</h4>
-                        <ConfusionMatrixDisplay cm={result.metrics!.confusionMatrix} />
+                        <ConfusionMatrixDisplay cm={result.metrics.confusionMatrix} />
                     </div>
                     <div className="lg:col-span-3 grid grid-cols-2 sm:grid-cols-3 gap-3">
-                        <MetricCard title="AUC" value={result.metrics!.auc.toFixed(3)} />
-                        <MetricCard title="Accuracy" value={`${(result.metrics!.accuracy * 100).toFixed(1)}%`} />
-                        <MetricCard title="F1-Score" value={result.metrics!.f1Score.toFixed(3)} />
-                        <MetricCard title="Sensitivity" value={result.metrics!.sensitivity.toFixed(3)} />
-                        <MetricCard title="Specificity" value={result.metrics!.specificity.toFixed(3)} />
-                        <MetricCard title="VPP / Precision" value={result.metrics!.vpp.toFixed(3)} />
-                        <MetricCard title="VPN" value={result.metrics!.vpn.toFixed(3)} />
+                        <MetricCard title="AUC" value={result.metrics.auc.toFixed(3)} />
+                        <MetricCard title="Accuracy" value={`${(result.metrics.accuracy * 100).toFixed(1)}%`} />
+                        <MetricCard title="F1-Score" value={result.metrics.f1Score.toFixed(3)} />
+                        <MetricCard title="Sensitivity" value={result.metrics.sensitivity.toFixed(3)} />
+                        <MetricCard title="Specificity" value={result.metrics.specificity.toFixed(3)} />
+                        <MetricCard title="VPP / Precision" value={result.metrics.vpp.toFixed(3)} />
+                        <MetricCard title="VPN" value={result.metrics.vpn.toFixed(3)} />
                     </div>
                     {Object.keys(result.hyperparameters || {}).length > 0 && (
                       <div className="lg:col-span-4 mt-4">
@@ -263,6 +315,11 @@ const handleDownloadRocPng = useCallback(() => {
                       </div>
                     )}
                  </div>
+                 ) : (
+                  <p className="text-sm text-gray-600 bg-gray-50 border border-dashed border-gray-300 rounded p-4">
+                    {result.statusMessage ?? 'This model did not return evaluation metrics.'}
+                  </p>
+                 )}
             </Card>
         ))}
     </div>
@@ -278,19 +335,25 @@ const handleDownloadRocPng = useCallback(() => {
             </div>
         </div>
         <div ref={rocContainerRef} className="h-96 w-full">
-            <ResponsiveContainer>
-                <LineChart margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis type="number" dataKey="fpr" name="False Positive Rate" domain={[0, 1]} label={{ value: 'False Positive Rate', position: 'insideBottom', offset: -5 }} />
-                    <YAxis type="number" dataKey="tpr" name="True Positive Rate" domain={[0, 1]} label={{ value: 'True Positive Rate', angle: -90, position: 'insideLeft' }} />
-                    <Tooltip />
-                    <Legend />
-                    <Line type="monotone" dataKey="tpr" stroke="#ccc" name="Random" dot={false} strokeDasharray="5 5" />
-                    {supervisedResults.filter(result => result.rocCurve).map((result, i) => (
-                        <Line key={result.name} type="monotone" data={result.rocCurve!} dataKey="tpr" name={`${result.name} (AUC=${result.metrics?.auc.toFixed(3)})`} stroke={colors[i % colors.length]} dot={false} strokeWidth={2}/>
-                    ))}
-                </LineChart>
-            </ResponsiveContainer>
+            {rocEligibleResults.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-sm text-gray-500 text-center px-4">
+                ROC curves will be displayed once at least one supervised model finishes successfully.
+              </div>
+            ) : (
+              <ResponsiveContainer>
+                  <LineChart margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis type="number" dataKey="fpr" name="False Positive Rate" domain={[0, 1]} label={{ value: 'False Positive Rate', position: 'insideBottom', offset: -5 }} />
+                      <YAxis type="number" dataKey="tpr" name="True Positive Rate" domain={[0, 1]} label={{ value: 'True Positive Rate', angle: -90, position: 'insideLeft' }} />
+                      <Tooltip />
+                      <Legend />
+                      <Line type="monotone" dataKey="tpr" stroke="#ccc" name="Random" dot={false} strokeDasharray="5 5" data={[{ fpr: 0, tpr: 0 }, { fpr: 1, tpr: 1 }]} />
+                      {rocEligibleResults.map((result, i) => (
+                          <Line key={result.name} type="monotone" data={result.rocCurve!} dataKey="tpr" name={`${result.name} (AUC=${result.metrics!.auc.toFixed(3)})`} stroke={colors[i % colors.length]} dot={false} strokeWidth={2}/>
+                      ))}
+                  </LineChart>
+              </ResponsiveContainer>
+            )}
         </div>
     </Card>
   );

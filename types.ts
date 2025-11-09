@@ -153,4 +153,5 @@ export interface ModelResult {
     kMeansResult?: KMeansResult;
     featureImportances?: { feature: string; importance: number }[];
     hyperparameters: Record<string, HyperparameterValue>;
+    statusMessage?: string;
 }
