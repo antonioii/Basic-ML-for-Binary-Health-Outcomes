@@ -1,4 +1,4 @@
-import { DataSet, TrainingConfig } from '../types';
+import { DataSet, ProcessingMode, TrainingConfig } from '../types';
 
 export interface TrainingStageEstimate {
   label: string;
@@ -71,7 +71,7 @@ const computeSvmGridSize = (flexibility: string): number => {
   return 6;
 };
 
-const getGridSize = (modelName: string, rows: number, config: TrainingConfig): number => {
+const computeBaseGridSize = (modelName: string, rows: number, config: TrainingConfig): number => {
   if (modelName === 'K-Nearest Neighbors (KNN)') {
     return computeKnnGridSize(rows);
   }
@@ -79,6 +79,34 @@ const getGridSize = (modelName: string, rows: number, config: TrainingConfig): n
     return computeSvmGridSize(config.svmFlexibility);
   }
   return STATIC_GRID_SIZES[modelName] ?? 4;
+};
+
+const getCustomGridSize = (modelName: string, config: TrainingConfig): number | undefined => {
+  const modelConfig = config.customHyperparameters?.[modelName];
+  if (!modelConfig) {
+    return undefined;
+  }
+  const combinations = Object.values(modelConfig).reduce((acc, values) => {
+    if (!Array.isArray(values) || values.length === 0) {
+      return acc;
+    }
+    return acc * Math.max(values.length, 1);
+  }, 1);
+  return Math.max(combinations, 1);
+};
+
+const getGridSize = (modelName: string, rows: number, config: TrainingConfig): number => {
+  if (config.processingMode === ProcessingMode.CUSTOM) {
+    const customSize = getCustomGridSize(modelName, config);
+    if (typeof customSize === 'number' && customSize > 0) {
+      return customSize;
+    }
+  }
+  const baseSize = computeBaseGridSize(modelName, rows, config);
+  if (config.processingMode === ProcessingMode.HARD) {
+    return Math.max(Math.round(baseSize * 1.75), baseSize + 4);
+  }
+  return baseSize;
 };
 
 const formatModelStageLabel = (modelName: string, config: TrainingConfig): string => {

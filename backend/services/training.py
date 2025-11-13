@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union, Optional, Sequence, Literal
 
 import numpy as np
 import pandas as pd
@@ -69,6 +69,72 @@ ENSEMBLE_MODELS = [
 ]
 
 RANDOM_STATE = 42
+ProcessingModeType = Literal['light', 'hard', 'custom']
+CustomGridSpec = Dict[str, Dict[str, List[Any]]]
+
+
+def _normalize_processing_mode(value: str) -> ProcessingModeType:
+    lowered = value.lower()
+    if lowered in {'hard', 'custom'}:
+        return lowered  # type: ignore[return-value]
+    return 'light'
+
+
+def _normalize_param_key(key: str) -> str:
+    stripped = key.strip()
+    if not stripped:
+        return 'classifier__param'
+    if stripped.startswith('classifier__') or stripped.startswith('preprocessor__'):
+        return stripped
+    return f'classifier__{stripped}'
+
+
+def _coerce_custom_value(value: Any) -> Any:
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, str):
+        candidate = value.strip()
+        if not candidate:
+            return None
+        lowered = candidate.lower()
+        if lowered in {'none', 'null'}:
+            return None
+        if lowered in {'true', 'false'}:
+            return lowered == 'true'
+        try:
+            if any(char in candidate for char in {'.', 'e', 'E'}):
+                return float(candidate)
+            return int(candidate)
+        except ValueError:
+            return candidate
+    return value
+
+
+def _prepare_param_grid(
+    model_name: str,
+    mode: ProcessingModeType,
+    custom_grids: Optional[CustomGridSpec],
+    default_grid: Dict[str, Sequence[Any]],
+    hard_grid: Optional[Dict[str, Sequence[Any]]] = None,
+) -> Dict[str, List[Any]]:
+    if mode == 'custom' and custom_grids:
+        raw_grid = custom_grids.get(model_name)
+        if raw_grid:
+            parsed: Dict[str, List[Any]] = {}
+            for key, values in raw_grid.items():
+                normalized_key = _normalize_param_key(key)
+                converted = [_coerce_custom_value(value) for value in values if value is not None and value != '']
+                if converted:
+                    parsed[normalized_key] = converted
+            if parsed:
+                return parsed
+
+    grid_source = hard_grid if (mode == 'hard' and hard_grid) else default_grid
+    prepared: Dict[str, List[Any]] = {}
+    for key, values in grid_source.items():
+        normalized_key = _normalize_param_key(key)
+        prepared[normalized_key] = list(values)
+    return prepared
 
 
 class MissingDependencyError(RuntimeError):
@@ -207,12 +273,48 @@ def _evaluate_classifier(
     cv: StratifiedKFold,
     hyperparameters: Dict[str, Union[str, int, float, None]] | None = None,
 ) -> Dict:
-    y_pred = cross_val_predict(pipeline, X, y, cv=cv, method='predict')
-    if hasattr(pipeline.named_steps['classifier'], 'predict_proba'):
-        y_proba = cross_val_predict(pipeline, X, y, cv=cv, method='predict_proba')[:, 1]
+    classifier = pipeline.named_steps['classifier']
+    classes = np.sort(np.asarray(y.unique()))
+    if classes.size < 2:
+        classes = np.array([0, 1])
+    negative_label = classes[0]
+    positive_label = classes[-1]
+
+    if hasattr(classifier, 'predict_proba'):
+        proba = cross_val_predict(pipeline, X, y, cv=cv, n_jobs=-1, method='predict_proba')
+        proba = np.asarray(proba)
+        if proba.ndim == 2 and proba.shape[1] > 1:
+            label_indices = np.argmax(proba, axis=1)
+            if classes.size >= proba.shape[1]:
+                y_pred = classes[label_indices]
+            else:
+                y_pred = label_indices
+            y_scores = proba[:, -1]
+        else:
+            y_scores = proba.ravel()
+            y_pred = np.where(y_scores >= 0.5, positive_label, negative_label)
+    elif hasattr(classifier, 'decision_function'):
+        decision = cross_val_predict(pipeline, X, y, cv=cv, n_jobs=-1, method='decision_function')
+        decision = np.asarray(decision)
+        if decision.ndim == 2 and decision.shape[1] > 1:
+            label_indices = np.argmax(decision, axis=1)
+            if classes.size >= decision.shape[1]:
+                y_pred = classes[label_indices]
+            else:
+                y_pred = label_indices
+            positive_scores = decision[:, -1]
+        else:
+            positive_scores = decision.ravel()
+            y_pred = np.where(positive_scores >= 0.0, positive_label, negative_label)
+        score_min = positive_scores.min()
+        score_range = positive_scores.max() - score_min
+        y_scores = (positive_scores - score_min) / (score_range + 1e-9)
     else:
-        decision = cross_val_predict(pipeline, X, y, cv=cv, method='decision_function')
-        y_proba = (decision - decision.min()) / (decision.max() - decision.min() + 1e-9)
+        y_pred = cross_val_predict(pipeline, X, y, cv=cv, n_jobs=-1, method='predict')
+        y_scores = y_pred.astype(float)
+
+    y_pred = np.asarray(y_pred).astype(int)
+    y_proba = np.asarray(y_scores).astype(float)
 
     tn, fp, fn, tp = confusion_matrix(y, y_pred).ravel()
     sensitivity = recall_score(y, y_pred)
@@ -265,13 +367,28 @@ def _grid_search(
     return grid.best_estimator_, grid.best_params_
 
 
-def _train_logistic(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: StratifiedKFold) -> Tuple[Dict, Pipeline]:
+def _train_logistic(
+    df: pd.DataFrame,
+    columns: List[str],
+    y: pd.Series,
+    cv: StratifiedKFold,
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
+) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
     pipeline = Pipeline(steps=[
         ('preprocessor', preprocessor),
         ('classifier', LogisticRegression(max_iter=2000, solver='lbfgs')),
     ])
-    param_grid = {'classifier__C': [0.01, 0.1, 1.0, 10.0]}
+    default_grid = {'classifier__C': [0.01, 0.1, 1.0, 10.0]}
+    hard_grid = {'classifier__C': [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]}
+    param_grid = _prepare_param_grid(
+        CLASSIFIER_NAMES['Logistic Regression'],
+        processing_mode,
+        custom_hyperparameters,
+        default_grid,
+        hard_grid,
+    )
     best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
     classifier: LogisticRegression = best_pipeline.named_steps['classifier']
     hyperparameters = _format_hyperparameters(best_params, {
@@ -289,7 +406,14 @@ def _train_logistic(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: Stra
     return result, best_pipeline
 
 
-def _train_knn(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: StratifiedKFold) -> Tuple[Dict, Pipeline]:
+def _train_knn(
+    df: pd.DataFrame,
+    columns: List[str],
+    y: pd.Series,
+    cv: StratifiedKFold,
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
+) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
     pipeline = Pipeline(steps=[
         ('preprocessor', preprocessor),
@@ -298,7 +422,20 @@ def _train_knn(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: Stratifie
     n_samples = len(df)
     max_k = max(1, min(n_samples - 1, 51))
     k_values = [k for k in range(1, max_k + 1, 2)]
-    param_grid = {'classifier__n_neighbors': k_values}
+    hard_max_k = max(1, min(n_samples - 1, 101))
+    hard_k_values = [k for k in range(1, hard_max_k + 1, 2)]
+    default_grid = {'classifier__n_neighbors': k_values}
+    hard_grid = {
+        'classifier__n_neighbors': hard_k_values,
+        'classifier__weights': ['uniform', 'distance'],
+    }
+    param_grid = _prepare_param_grid(
+        CLASSIFIER_NAMES['K-Nearest Neighbors (KNN)'],
+        processing_mode,
+        custom_hyperparameters,
+        default_grid,
+        hard_grid,
+    )
     best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
     classifier: KNeighborsClassifier = best_pipeline.named_steps['classifier']
     hyperparameters = _format_hyperparameters(best_params, {
@@ -316,7 +453,15 @@ def _train_knn(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: Stratifie
     return result, best_pipeline
 
 
-def _train_svm(df: pd.DataFrame, columns: List[str], y: pd.Series, flexibility: str, cv: StratifiedKFold) -> Tuple[Dict, Pipeline]:
+def _train_svm(
+    df: pd.DataFrame,
+    columns: List[str],
+    y: pd.Series,
+    flexibility: str,
+    cv: StratifiedKFold,
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
+) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
     pipeline = Pipeline(steps=[
         ('preprocessor', preprocessor),
@@ -325,17 +470,35 @@ def _train_svm(df: pd.DataFrame, columns: List[str], y: pd.Series, flexibility: 
     if 'Low' in flexibility:
         Cs = [0.1, 1]
         gammas = [0.001, 0.01]
+        hard_cs = [0.01, 0.1, 1, 5]
+        hard_gammas = [0.0005, 0.001, 0.005, 0.01, 0.05]
     elif 'High' in flexibility:
         Cs = [10, 50, 100]
         gammas = [0.1, 1]
+        hard_cs = [5, 10, 25, 50, 100, 150]
+        hard_gammas = [0.01, 0.05, 0.1, 0.5, 1]
     else:
         Cs = [1, 5, 10]
         gammas = [0.01, 0.1]
-    param_grid = {
+        hard_cs = [0.5, 1, 5, 10, 25]
+        hard_gammas = [0.001, 0.01, 0.05, 0.1]
+    default_grid = {
         'classifier__C': Cs,
         'classifier__gamma': gammas,
         'classifier__kernel': ['rbf'],
     }
+    hard_grid = {
+        'classifier__C': hard_cs,
+        'classifier__gamma': hard_gammas,
+        'classifier__kernel': ['rbf'],
+    }
+    param_grid = _prepare_param_grid(
+        CLASSIFIER_NAMES['Support Vector Machine (SVM)'],
+        processing_mode,
+        custom_hyperparameters,
+        default_grid,
+        hard_grid,
+    )
     best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
     classifier: SVC = best_pipeline.named_steps['classifier']
     hyperparameters = _format_hyperparameters(best_params, {})
@@ -350,15 +513,35 @@ def _train_svm(df: pd.DataFrame, columns: List[str], y: pd.Series, flexibility: 
     return result, best_pipeline
 
 
-def _train_random_forest(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: StratifiedKFold) -> Tuple[Dict, Pipeline]:
+def _train_random_forest(
+    df: pd.DataFrame,
+    columns: List[str],
+    y: pd.Series,
+    cv: StratifiedKFold,
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
+) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
     classifier = RandomForestClassifier(random_state=RANDOM_STATE)
     pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
-    param_grid = {
+    default_grid = {
         'classifier__n_estimators': [200, 400],
         'classifier__max_depth': [None, 10, 20],
         'classifier__min_samples_split': [2, 5],
     }
+    hard_grid = {
+        'classifier__n_estimators': [200, 400, 600],
+        'classifier__max_depth': [None, 10, 20, 30],
+        'classifier__min_samples_split': [2, 5, 10],
+        'classifier__min_samples_leaf': [1, 2, 4],
+    }
+    param_grid = _prepare_param_grid(
+        CLASSIFIER_NAMES['Random Forest'],
+        processing_mode,
+        custom_hyperparameters,
+        default_grid,
+        hard_grid,
+    )
     best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
     hyperparameters = _format_hyperparameters(best_params, {})
     result = _evaluate_classifier(
@@ -374,15 +557,35 @@ def _train_random_forest(df: pd.DataFrame, columns: List[str], y: pd.Series, cv:
     return result, best_pipeline
 
 
-def _train_gradient_boost(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: StratifiedKFold) -> Tuple[Dict, Pipeline]:
+def _train_gradient_boost(
+    df: pd.DataFrame,
+    columns: List[str],
+    y: pd.Series,
+    cv: StratifiedKFold,
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
+) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
     classifier = GradientBoostingClassifier(random_state=RANDOM_STATE)
     pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
-    param_grid = {
+    default_grid = {
         'classifier__learning_rate': [0.05, 0.1],
         'classifier__n_estimators': [100, 200],
         'classifier__max_depth': [3, 5],
     }
+    hard_grid = {
+        'classifier__learning_rate': [0.01, 0.05, 0.1],
+        'classifier__n_estimators': [100, 200, 400],
+        'classifier__max_depth': [3, 5, 7],
+        'classifier__subsample': [0.8, 1.0],
+    }
+    param_grid = _prepare_param_grid(
+        CLASSIFIER_NAMES['Gradient Boosting'],
+        processing_mode,
+        custom_hyperparameters,
+        default_grid,
+        hard_grid,
+    )
     best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
     classifier: GradientBoostingClassifier = best_pipeline.named_steps['classifier']
     hyperparameters = _format_hyperparameters(best_params, {'loss': str(classifier.loss)})
@@ -399,7 +602,14 @@ def _train_gradient_boost(df: pd.DataFrame, columns: List[str], y: pd.Series, cv
     return result, best_pipeline
 
 
-def _train_elastic_net(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: StratifiedKFold) -> Tuple[Dict, Pipeline]:
+def _train_elastic_net(
+    df: pd.DataFrame,
+    columns: List[str],
+    y: pd.Series,
+    cv: StratifiedKFold,
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
+) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
     classifier = LogisticRegression(
         max_iter=5000,
@@ -409,10 +619,21 @@ def _train_elastic_net(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: S
         random_state=RANDOM_STATE,
     )
     pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
-    param_grid = {
+    default_grid = {
         'classifier__C': [0.01, 0.1, 1.0],
         'classifier__l1_ratio': [0.2, 0.5, 0.8],
     }
+    hard_grid = {
+        'classifier__C': [0.001, 0.01, 0.1, 1.0, 10.0],
+        'classifier__l1_ratio': [0.1, 0.3, 0.5, 0.7, 0.9],
+    }
+    param_grid = _prepare_param_grid(
+        CLASSIFIER_NAMES['Elastic Net (Logistic Regression)'],
+        processing_mode,
+        custom_hyperparameters,
+        default_grid,
+        hard_grid,
+    )
     best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
     hyperparameters = _format_hyperparameters(best_params, {'solver': 'saga'})
     result = _evaluate_classifier(
@@ -426,11 +647,26 @@ def _train_elastic_net(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: S
     return result, best_pipeline
 
 
-def _train_naive_bayes(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: StratifiedKFold) -> Tuple[Dict, Pipeline]:
+def _train_naive_bayes(
+    df: pd.DataFrame,
+    columns: List[str],
+    y: pd.Series,
+    cv: StratifiedKFold,
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
+) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
     classifier = GaussianNB()
     pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
-    param_grid = {'classifier__var_smoothing': [1e-9, 1e-8, 1e-7]}
+    default_grid = {'classifier__var_smoothing': [1e-9, 1e-8, 1e-7]}
+    hard_grid = {'classifier__var_smoothing': [1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5]}
+    param_grid = _prepare_param_grid(
+        CLASSIFIER_NAMES['Naive Bayes (Gaussian)'],
+        processing_mode,
+        custom_hyperparameters,
+        default_grid,
+        hard_grid,
+    )
     best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
     hyperparameters = _format_hyperparameters(best_params, {})
     result = _evaluate_classifier(
@@ -444,7 +680,14 @@ def _train_naive_bayes(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: S
     return result, best_pipeline
 
 
-def _train_xgboost(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: StratifiedKFold) -> Tuple[Dict, Pipeline]:
+def _train_xgboost(
+    df: pd.DataFrame,
+    columns: List[str],
+    y: pd.Series,
+    cv: StratifiedKFold,
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
+) -> Tuple[Dict, Pipeline]:
     XGBClassifier = _import_optional_estimator('xgboost', 'XGBClassifier', CLASSIFIER_NAMES['XGBoost'])
     preprocessor = _build_preprocessor(df, columns)
     classifier = XGBClassifier(
@@ -458,12 +701,26 @@ def _train_xgboost(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: Strat
         n_jobs=-1,
     )
     pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
-    param_grid = {
+    default_grid = {
         'classifier__n_estimators': [200, 400],
         'classifier__max_depth': [3, 5],
         'classifier__learning_rate': [0.05, 0.1],
         'classifier__subsample': [0.8, 1.0],
     }
+    hard_grid = {
+        'classifier__n_estimators': [200, 400, 600],
+        'classifier__max_depth': [3, 5, 7],
+        'classifier__learning_rate': [0.03, 0.05, 0.1],
+        'classifier__subsample': [0.7, 0.85, 1.0],
+        'classifier__colsample_bytree': [0.7, 0.85, 1.0],
+    }
+    param_grid = _prepare_param_grid(
+        CLASSIFIER_NAMES['XGBoost'],
+        processing_mode,
+        custom_hyperparameters,
+        default_grid,
+        hard_grid,
+    )
     best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
     result = _evaluate_classifier(
         CLASSIFIER_NAMES['XGBoost'],
@@ -478,7 +735,14 @@ def _train_xgboost(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: Strat
     return result, best_pipeline
 
 
-def _train_lightgbm(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: StratifiedKFold) -> Tuple[Dict, Pipeline]:
+def _train_lightgbm(
+    df: pd.DataFrame,
+    columns: List[str],
+    y: pd.Series,
+    cv: StratifiedKFold,
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
+) -> Tuple[Dict, Pipeline]:
     LGBMClassifier = _import_optional_estimator('lightgbm', 'LGBMClassifier', CLASSIFIER_NAMES['LightGBM'])
     preprocessor = _build_preprocessor(df, columns)
     classifier = LGBMClassifier(
@@ -488,12 +752,26 @@ def _train_lightgbm(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: Stra
         verbose=-1,
     )
     pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
-    param_grid = {
+    default_grid = {
         'classifier__n_estimators': [200, 400],
         'classifier__learning_rate': [0.05, 0.1],
         'classifier__num_leaves': [31, 63],
         'classifier__max_depth': [-1, 15],
     }
+    hard_grid = {
+        'classifier__n_estimators': [200, 400, 600],
+        'classifier__learning_rate': [0.03, 0.05, 0.1],
+        'classifier__num_leaves': [31, 63, 127],
+        'classifier__max_depth': [-1, 12, 20],
+        'classifier__subsample': [0.8, 1.0],
+    }
+    param_grid = _prepare_param_grid(
+        CLASSIFIER_NAMES['LightGBM'],
+        processing_mode,
+        custom_hyperparameters,
+        default_grid,
+        hard_grid,
+    )
     best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
     result = _evaluate_classifier(
         CLASSIFIER_NAMES['LightGBM'],
@@ -508,7 +786,14 @@ def _train_lightgbm(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: Stra
     return result, best_pipeline
 
 
-def _train_catboost(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: StratifiedKFold) -> Tuple[Dict, Pipeline]:
+def _train_catboost(
+    df: pd.DataFrame,
+    columns: List[str],
+    y: pd.Series,
+    cv: StratifiedKFold,
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
+) -> Tuple[Dict, Pipeline]:
     CatBoostClassifier = _import_optional_estimator('catboost', 'CatBoostClassifier', CLASSIFIER_NAMES['CatBoost'])
     preprocessor = _build_preprocessor(df, columns)
     classifier = CatBoostClassifier(
@@ -518,11 +803,24 @@ def _train_catboost(df: pd.DataFrame, columns: List[str], y: pd.Series, cv: Stra
         allow_writing_files=False,
     )
     pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
-    param_grid = {
+    default_grid = {
         'classifier__iterations': [200, 400],
         'classifier__learning_rate': [0.05, 0.1],
         'classifier__depth': [4, 6],
     }
+    hard_grid = {
+        'classifier__iterations': [200, 400, 600],
+        'classifier__learning_rate': [0.03, 0.05, 0.1],
+        'classifier__depth': [4, 6, 8],
+        'classifier__l2_leaf_reg': [3, 5, 7, 9],
+    }
+    param_grid = _prepare_param_grid(
+        CLASSIFIER_NAMES['CatBoost'],
+        processing_mode,
+        custom_hyperparameters,
+        default_grid,
+        hard_grid,
+    )
     best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
     result = _evaluate_classifier(
         CLASSIFIER_NAMES['CatBoost'],
@@ -544,6 +842,8 @@ def _train_voting_classifier(
     cv: StratifiedKFold,
     trained_pipelines: Dict[str, Pipeline],
     requested_models: List[str],
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
 ) -> Tuple[Dict, Pipeline | None]:
     estimators = _collect_base_estimators(requested_models, trained_pipelines)
     if len(estimators) < 2:
@@ -555,7 +855,13 @@ def _train_voting_classifier(
     preprocessor = _build_preprocessor(df, columns)
     classifier = VotingClassifier(estimators=estimators, voting=voting_strategy)
     pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
-    param_grid = {'classifier__weights': [None]}
+    default_grid = {'classifier__weights': [None]}
+    param_grid = _prepare_param_grid(
+        CLASSIFIER_NAMES['Voting Classifier'],
+        processing_mode,
+        custom_hyperparameters,
+        default_grid,
+    )
     best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
     hyperparameters = _format_hyperparameters(best_params, {
         'voting': voting_strategy,
@@ -579,6 +885,8 @@ def _train_stacking_classifier(
     cv: StratifiedKFold,
     trained_pipelines: Dict[str, Pipeline],
     requested_models: List[str],
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
 ) -> Tuple[Dict, Pipeline | None]:
     estimators = _collect_base_estimators(requested_models, trained_pipelines)
     if len(estimators) < 2:
@@ -602,7 +910,15 @@ def _train_stacking_classifier(
     )
     preprocessor = _build_preprocessor(df, columns)
     pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
-    param_grid = {'classifier__final_estimator__C': [0.5, 1.0]}
+    default_grid = {'classifier__final_estimator__C': [0.5, 1.0]}
+    hard_grid = {'classifier__final_estimator__C': [0.25, 0.5, 1.0, 2.0]}
+    param_grid = _prepare_param_grid(
+        CLASSIFIER_NAMES['Stacking Classifier'],
+        processing_mode,
+        custom_hyperparameters,
+        default_grid,
+        hard_grid,
+    )
     best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
     hyperparameters = _format_hyperparameters(best_params, {
         'estimators': ', '.join(name for name, _ in estimators),
@@ -632,7 +948,13 @@ def _extract_feature_importances(pipeline: Pipeline) -> List[Dict[str, float]]:
     return []
 
 
-def train_supervised_models(entry: DatasetEntry, models: List[str], svm_flexibility: str) -> List[Dict]:
+def train_supervised_models(
+    entry: DatasetEntry,
+    models: List[str],
+    svm_flexibility: str,
+    processing_mode: ProcessingModeType,
+    custom_hyperparameters: Optional[CustomGridSpec],
+) -> List[Dict]:
     df = entry.active_df.copy()
     feature_columns = entry.current_feature_columns or entry.feature_columns
     if not feature_columns:
@@ -650,25 +972,25 @@ def train_supervised_models(entry: DatasetEntry, models: List[str], svm_flexibil
     for model_name in base_requests:
         try:
             if model_name == CLASSIFIER_NAMES['Logistic Regression']:
-                result, pipeline = _train_logistic(X, feature_columns, y, cv)
+                result, pipeline = _train_logistic(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['Elastic Net (Logistic Regression)']:
-                result, pipeline = _train_elastic_net(X, feature_columns, y, cv)
+                result, pipeline = _train_elastic_net(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['K-Nearest Neighbors (KNN)']:
-                result, pipeline = _train_knn(X, feature_columns, y, cv)
+                result, pipeline = _train_knn(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['Support Vector Machine (SVM)']:
-                result, pipeline = _train_svm(X, feature_columns, y, svm_flexibility, cv)
+                result, pipeline = _train_svm(X, feature_columns, y, svm_flexibility, cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['Random Forest']:
-                result, pipeline = _train_random_forest(X, feature_columns, y, cv)
+                result, pipeline = _train_random_forest(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['Gradient Boosting']:
-                result, pipeline = _train_gradient_boost(X, feature_columns, y, cv)
+                result, pipeline = _train_gradient_boost(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['XGBoost']:
-                result, pipeline = _train_xgboost(X, feature_columns, y, cv)
+                result, pipeline = _train_xgboost(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['LightGBM']:
-                result, pipeline = _train_lightgbm(X, feature_columns, y, cv)
+                result, pipeline = _train_lightgbm(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['CatBoost']:
-                result, pipeline = _train_catboost(X, feature_columns, y, cv)
+                result, pipeline = _train_catboost(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['Naive Bayes (Gaussian)']:
-                result, pipeline = _train_naive_bayes(X, feature_columns, y, cv)
+                result, pipeline = _train_naive_bayes(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
             else:
                 continue
         except MissingDependencyError as exc:
@@ -680,9 +1002,27 @@ def train_supervised_models(entry: DatasetEntry, models: List[str], svm_flexibil
 
     for ensemble_name in ensemble_requests:
         if ensemble_name == CLASSIFIER_NAMES['Voting Classifier']:
-            result, _ = _train_voting_classifier(X, feature_columns, y, cv, trained_pipelines, models)
+            result, _ = _train_voting_classifier(
+                X,
+                feature_columns,
+                y,
+                cv,
+                trained_pipelines,
+                models,
+                processing_mode,
+                custom_hyperparameters,
+            )
         elif ensemble_name == CLASSIFIER_NAMES['Stacking Classifier']:
-            result, _ = _train_stacking_classifier(X, feature_columns, y, cv, trained_pipelines, models)
+            result, _ = _train_stacking_classifier(
+                X,
+                feature_columns,
+                y,
+                cv,
+                trained_pipelines,
+                models,
+                processing_mode,
+                custom_hyperparameters,
+            )
         else:
             continue
         results_by_model[ensemble_name] = result
@@ -760,11 +1100,27 @@ def run_kmeans(entry: DatasetEntry, n_clusters: int) -> Dict:
     }
 
 
-def train_models(entry: DatasetEntry, models: List[str], svm_flexibility: str, kmeans_clusters: int) -> List[Dict]:
+def train_models(
+    entry: DatasetEntry,
+    models: List[str],
+    svm_flexibility: str,
+    kmeans_clusters: int,
+    processing_mode: str,
+    custom_hyperparameters: Optional[CustomGridSpec] = None,
+) -> List[Dict]:
     results: List[Dict] = []
     supervised_models = [model for model in models if model != CLASSIFIER_NAMES['K-Means Clustering']]
+    normalized_mode = _normalize_processing_mode(processing_mode)
     if supervised_models:
-        results.extend(train_supervised_models(entry, supervised_models, svm_flexibility))
+        results.extend(
+            train_supervised_models(
+                entry,
+                supervised_models,
+                svm_flexibility,
+                normalized_mode,
+                custom_hyperparameters,
+            )
+        )
     if CLASSIFIER_NAMES['K-Means Clustering'] in models:
         results.append(run_kmeans(entry, kmeans_clusters))
     return results

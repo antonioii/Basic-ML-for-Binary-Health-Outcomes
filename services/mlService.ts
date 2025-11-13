@@ -9,10 +9,19 @@ export const trainModels = async (
   dataSet: DataSet,
   config: TrainingConfig
 ): Promise<ModelResult[]> => {
-  const response = await apiClient.post<TrainingResponse>(`/datasets/${dataSet.datasetId}/train`, {
+  const payload: Record<string, unknown> = {
     models: config.models,
     svmFlexibility: config.svmFlexibility,
     kMeansClusters: config.kMeansClusters,
+    processingMode: config.processingMode,
+  };
+
+  if (config.customHyperparameters && Object.keys(config.customHyperparameters).length) {
+    payload.customHyperparameters = config.customHyperparameters;
+  }
+
+  const response = await apiClient.post<TrainingResponse>(`/datasets/${dataSet.datasetId}/train`, {
+    ...payload,
   });
   return response.results;
 };

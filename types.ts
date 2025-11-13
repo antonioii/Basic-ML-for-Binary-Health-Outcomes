@@ -97,10 +97,22 @@ export enum SvmFlexibility {
     HIGH = 'High (Flexible)',
 }
 
+export enum ProcessingMode {
+  LIGHT = 'light',
+  HARD = 'hard',
+  CUSTOM = 'custom',
+}
+
+export type CustomHyperparameterValues = (string | number | boolean | null)[];
+
+export type CustomHyperparameterConfig = Record<string, Record<string, CustomHyperparameterValues>>;
+
 export interface TrainingConfig {
     models: string[];
     svmFlexibility: SvmFlexibility;
     kMeansClusters: number;
+    processingMode: ProcessingMode;
+    customHyperparameters?: CustomHyperparameterConfig;
 }
 
 export interface ConfusionMatrix {

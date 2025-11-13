@@ -154,7 +154,14 @@ def train(dataset_id: str, config: TrainingConfigRequest) -> TrainingResponse:
             raise HTTPException(status_code=400, detail=f'Unsupported model: {model}')
 
     try:
-        results = train_models(entry, models, config.svmFlexibility, config.kMeansClusters)
+        results = train_models(
+            entry,
+            models,
+            config.svmFlexibility,
+            config.kMeansClusters,
+            config.processingMode,
+            config.customHyperparameters,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
