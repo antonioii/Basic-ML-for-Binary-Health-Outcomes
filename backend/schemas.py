@@ -145,12 +145,19 @@ class ConfusionMatrix(BaseModel):
 class ModelMetrics(BaseModel):
     confusionMatrix: ConfusionMatrix = Field(..., alias='confusion_matrix')
     sensitivity: float
+    sensitivityStd: Optional[float] = Field(default=None, alias='sensitivity_std')
     specificity: float
+    specificityStd: Optional[float] = Field(default=None, alias='specificity_std')
     vpp: float
+    vppStd: Optional[float] = Field(default=None, alias='vpp_std')
     vpn: float
+    vpnStd: Optional[float] = Field(default=None, alias='vpn_std')
     f1Score: float = Field(..., alias='f1_score')
-    auc: float
+    f1ScoreStd: Optional[float] = Field(default=None, alias='f1_score_std')
+    auc: Optional[float] = None
+    aucStd: Optional[float] = Field(default=None, alias='auc_std')
     accuracy: float
+    accuracyStd: Optional[float] = Field(default=None, alias='accuracy_std')
 
     class Config:
         allow_population_by_field_name = True

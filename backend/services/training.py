@@ -25,7 +25,7 @@ from sklearn.metrics import (
     roc_auc_score,
     roc_curve,
 )
-from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_val_predict
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.pipeline import Pipeline
@@ -69,6 +69,7 @@ ENSEMBLE_MODELS = [
 ]
 
 RANDOM_STATE = 42
+EVALUATION_RANDOM_STATE = 137
 ProcessingModeType = Literal['light', 'hard', 'custom']
 CustomGridSpec = Dict[str, Dict[str, List[Any]]]
 
@@ -257,12 +258,160 @@ def _build_preprocessor(df: pd.DataFrame, columns: List[str]) -> ColumnTransform
     return ColumnTransformer(transformers=transformers, remainder='drop', sparse_threshold=0)
 
 
-def _build_cv(y: pd.Series) -> StratifiedKFold:
+def _determine_cv_splits(y: pd.Series) -> int:
     class_counts = y.value_counts()
     max_splits = min(int(class_counts.min()), len(y), 10)
     if max_splits < 2:
         raise ValueError('Each class must contain at least two observations to perform stratified cross-validation.')
-    return StratifiedKFold(n_splits=max_splits, shuffle=True, random_state=42)
+    return max_splits
+
+
+def _build_cv(
+    y: pd.Series,
+    *,
+    random_state: int = RANDOM_STATE,
+    n_splits: Optional[int] = None,
+) -> StratifiedKFold:
+    splits = n_splits or _determine_cv_splits(y)
+    return StratifiedKFold(n_splits=splits, shuffle=True, random_state=random_state)
+
+
+def _sanitize_scores(scores: np.ndarray) -> np.ndarray:
+    score_min = float(scores.min())
+    score_range = float(scores.max() - score_min)
+    return (scores - score_min) / (score_range + 1e-9)
+
+
+def _compute_metric_std(fold_metrics: List[Dict[str, Optional[float]]], key: str) -> Optional[float]:
+    values = [metric[key] for metric in fold_metrics if metric.get(key) is not None]
+    if len(values) < 2:
+        return None
+    return float(np.std(values, ddof=1))
+
+
+def _compute_voting_scores(
+    pipeline: Pipeline,
+    X_test: pd.DataFrame,
+    positive_label: int,
+) -> Optional[np.ndarray]:
+    preprocessor = pipeline.named_steps.get('preprocessor')
+    classifier = pipeline.named_steps.get('classifier')
+    if not isinstance(classifier, VotingClassifier) or getattr(classifier, 'voting', None) != 'hard':
+        return None
+    if preprocessor is None or not hasattr(classifier, 'estimators_') or not classifier.estimators_:
+        return None
+    X_processed = preprocessor.transform(X_test)
+    votes: List[np.ndarray] = []
+    for estimator in classifier.estimators_:
+        predictions = estimator.predict(X_processed)
+        votes.append(np.asarray(predictions).astype(int))
+    vote_matrix = np.vstack(votes)
+    positive_share = np.mean(vote_matrix == positive_label, axis=0)
+    return positive_share.astype(float)
+
+
+def _predict_with_scores(
+    model_name: str,
+    pipeline: Pipeline,
+    X_test: pd.DataFrame,
+    positive_label: int,
+) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[str]]:
+    if hasattr(pipeline, 'predict_proba'):
+        proba = pipeline.predict_proba(X_test)
+        classifier = pipeline.named_steps['classifier']
+        class_order = getattr(classifier, 'classes_', None)
+        if class_order is not None and positive_label in class_order:
+            pos_index = int(np.where(class_order == positive_label)[0][0])
+            positive_scores = proba[:, pos_index]
+        else:
+            positive_scores = proba[:, -1] if proba.ndim == 2 and proba.shape[1] > 1 else proba.ravel()
+        predictions = pipeline.predict(X_test)
+        return np.asarray(predictions).astype(int), np.asarray(positive_scores).astype(float), None
+
+    if hasattr(pipeline, 'decision_function'):
+        decision = pipeline.decision_function(X_test)
+        if isinstance(decision, list):
+            decision = np.asarray(decision)
+        if decision.ndim == 2 and decision.shape[1] > 1:
+            positive_scores = decision[:, -1]
+        else:
+            positive_scores = decision.ravel()
+        normalized_scores = _sanitize_scores(np.asarray(positive_scores).astype(float))
+        predictions = pipeline.predict(X_test)
+        return np.asarray(predictions).astype(int), normalized_scores, None
+
+    voting_scores = _compute_voting_scores(pipeline, X_test, positive_label)
+    if voting_scores is not None:
+        predictions = pipeline.predict(X_test)
+        return np.asarray(predictions).astype(int), voting_scores, None
+
+    predictions = pipeline.predict(X_test)
+    warning = (
+        f'{model_name} does not expose probability estimates; AUC and ROC curves are unavailable for this model.'
+    )
+    return np.asarray(predictions).astype(int), None, warning
+
+
+def _run_cross_validated_evaluation(
+    model_name: str,
+    pipeline: Pipeline,
+    X: pd.DataFrame,
+    y: pd.Series,
+    cv: StratifiedKFold,
+    positive_label: int,
+) -> Dict[str, Any]:
+    n_samples = len(y)
+    predictions = np.zeros(n_samples, dtype=int)
+    scores = np.full(n_samples, np.nan)
+    fold_metrics: List[Dict[str, Optional[float]]] = []
+    has_scores = True
+    status_message: Optional[str] = None
+
+    for fold_index, (train_idx, test_idx) in enumerate(cv.split(X, y), start=1):
+        fold_pipeline = clone(pipeline)
+        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+        fold_pipeline.fit(X_train, y_train)
+        fold_pred, fold_scores, warning = _predict_with_scores(model_name, fold_pipeline, X_test, positive_label)
+        if warning and not status_message:
+            status_message = warning
+        predictions[test_idx] = fold_pred
+        if fold_scores is None:
+            has_scores = False
+        else:
+            scores[test_idx] = fold_scores
+        tn, fp, fn, tp = confusion_matrix(y_test, fold_pred, labels=[0, 1]).ravel()
+        fold_sensitivity = recall_score(y_test, fold_pred)
+        fold_specificity = tn / (tn + fp) if (tn + fp) else 0.0
+        fold_precision = precision_score(y_test, fold_pred, zero_division=0)
+        fold_vpn = tn / (tn + fn) if (tn + fn) else 0.0
+        fold_accuracy = accuracy_score(y_test, fold_pred)
+        fold_f1 = f1_score(y_test, fold_pred)
+        fold_auc: Optional[float] = None
+        if fold_scores is not None:
+            try:
+                fold_auc = float(roc_auc_score(y_test, fold_scores))
+            except ValueError:
+                fold_auc = None
+        fold_metrics.append({
+            'sensitivity': float(fold_sensitivity),
+            'specificity': float(fold_specificity),
+            'vpp': float(fold_precision),
+            'vpn': float(fold_vpn),
+            'accuracy': float(fold_accuracy),
+            'f1_score': float(fold_f1),
+            'auc': fold_auc,
+        })
+
+    useable_scores = has_scores and np.isfinite(scores).all()
+    final_scores = scores if useable_scores else None
+
+    return {
+        'predictions': predictions,
+        'scores': final_scores,
+        'fold_metrics': fold_metrics,
+        'status_message': status_message,
+    }
 
 
 def _evaluate_classifier(
@@ -277,54 +426,40 @@ def _evaluate_classifier(
     classes = np.sort(np.asarray(y.unique()))
     if classes.size < 2:
         classes = np.array([0, 1])
-    negative_label = classes[0]
     positive_label = classes[-1]
 
-    if hasattr(classifier, 'predict_proba'):
-        proba = cross_val_predict(pipeline, X, y, cv=cv, n_jobs=-1, method='predict_proba')
-        proba = np.asarray(proba)
-        if proba.ndim == 2 and proba.shape[1] > 1:
-            label_indices = np.argmax(proba, axis=1)
-            if classes.size >= proba.shape[1]:
-                y_pred = classes[label_indices]
-            else:
-                y_pred = label_indices
-            y_scores = proba[:, -1]
-        else:
-            y_scores = proba.ravel()
-            y_pred = np.where(y_scores >= 0.5, positive_label, negative_label)
-    elif hasattr(classifier, 'decision_function'):
-        decision = cross_val_predict(pipeline, X, y, cv=cv, n_jobs=-1, method='decision_function')
-        decision = np.asarray(decision)
-        if decision.ndim == 2 and decision.shape[1] > 1:
-            label_indices = np.argmax(decision, axis=1)
-            if classes.size >= decision.shape[1]:
-                y_pred = classes[label_indices]
-            else:
-                y_pred = label_indices
-            positive_scores = decision[:, -1]
-        else:
-            positive_scores = decision.ravel()
-            y_pred = np.where(positive_scores >= 0.0, positive_label, negative_label)
-        score_min = positive_scores.min()
-        score_range = positive_scores.max() - score_min
-        y_scores = (positive_scores - score_min) / (score_range + 1e-9)
-    else:
-        y_pred = cross_val_predict(pipeline, X, y, cv=cv, n_jobs=-1, method='predict')
-        y_scores = y_pred.astype(float)
-
-    y_pred = np.asarray(y_pred).astype(int)
-    y_proba = np.asarray(y_scores).astype(float)
-
-    tn, fp, fn, tp = confusion_matrix(y, y_pred).ravel()
+    evaluation = _run_cross_validated_evaluation(name, pipeline, X, y, cv, positive_label)
+    y_pred = evaluation['predictions']
+    y_scores = evaluation.get('scores')
+    tn, fp, fn, tp = confusion_matrix(y, y_pred, labels=[0, 1]).ravel()
     sensitivity = recall_score(y, y_pred)
     specificity = tn / (tn + fp) if (tn + fp) else 0.0
     precision = precision_score(y, y_pred, zero_division=0)
     vpn = tn / (tn + fn) if (tn + fn) else 0.0
     accuracy = accuracy_score(y, y_pred)
     f1 = f1_score(y, y_pred)
-    auc_value = roc_auc_score(y, y_proba)
-    fpr, tpr, _ = roc_curve(y, y_proba)
+
+    auc_value = None
+    roc_points = None
+    if y_scores is not None:
+        try:
+            auc_value = float(roc_auc_score(y, y_scores))
+            fpr, tpr, _ = roc_curve(y, y_scores)
+            roc_points = [{'fpr': float(f), 'tpr': float(t)} for f, t in zip(fpr, tpr)]
+        except ValueError:
+            auc_value = None
+            roc_points = None
+
+    fold_metrics = evaluation['fold_metrics']
+    std_metrics = {
+        'sensitivity_std': _compute_metric_std(fold_metrics, 'sensitivity'),
+        'specificity_std': _compute_metric_std(fold_metrics, 'specificity'),
+        'vpp_std': _compute_metric_std(fold_metrics, 'vpp'),
+        'vpn_std': _compute_metric_std(fold_metrics, 'vpn'),
+        'f1_score_std': _compute_metric_std(fold_metrics, 'f1_score'),
+        'accuracy_std': _compute_metric_std(fold_metrics, 'accuracy'),
+        'auc_std': _compute_metric_std(fold_metrics, 'auc'),
+    }
 
     return {
         'name': name,
@@ -336,15 +471,23 @@ def _evaluate_classifier(
                 'fn': int(fn),
             },
             'sensitivity': float(sensitivity),
+            'sensitivity_std': std_metrics['sensitivity_std'],
             'specificity': float(specificity),
+            'specificity_std': std_metrics['specificity_std'],
             'vpp': float(precision),
+            'vpp_std': std_metrics['vpp_std'],
             'vpn': float(vpn),
+            'vpn_std': std_metrics['vpn_std'],
             'f1_score': float(f1),
-            'auc': float(auc_value),
+            'f1_score_std': std_metrics['f1_score_std'],
+            'auc': float(auc_value) if auc_value is not None else None,
+            'auc_std': std_metrics['auc_std'],
             'accuracy': float(accuracy),
+            'accuracy_std': std_metrics['accuracy_std'],
         },
-        'roc_curve': [{'fpr': float(f), 'tpr': float(t)} for f, t in zip(fpr, tpr)],
+        'roc_curve': roc_points,
         'hyperparameters': hyperparameters or {},
+        'status_message': evaluation.get('status_message'),
     }
 
 
@@ -371,7 +514,8 @@ def _train_logistic(
     df: pd.DataFrame,
     columns: List[str],
     y: pd.Series,
-    cv: StratifiedKFold,
+    tuning_cv: StratifiedKFold,
+    evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
 ) -> Tuple[Dict, Pipeline]:
@@ -389,7 +533,7 @@ def _train_logistic(
         default_grid,
         hard_grid,
     )
-    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, tuning_cv)
     classifier: LogisticRegression = best_pipeline.named_steps['classifier']
     hyperparameters = _format_hyperparameters(best_params, {
         'penalty': str(classifier.penalty),
@@ -400,7 +544,7 @@ def _train_logistic(
         best_pipeline,
         df[columns],
         y,
-        cv,
+        evaluation_cv,
         hyperparameters,
     )
     return result, best_pipeline
@@ -410,7 +554,8 @@ def _train_knn(
     df: pd.DataFrame,
     columns: List[str],
     y: pd.Series,
-    cv: StratifiedKFold,
+    tuning_cv: StratifiedKFold,
+    evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
 ) -> Tuple[Dict, Pipeline]:
@@ -436,7 +581,7 @@ def _train_knn(
         default_grid,
         hard_grid,
     )
-    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, tuning_cv)
     classifier: KNeighborsClassifier = best_pipeline.named_steps['classifier']
     hyperparameters = _format_hyperparameters(best_params, {
         'metric': str(classifier.metric),
@@ -447,7 +592,7 @@ def _train_knn(
         best_pipeline,
         df[columns],
         y,
-        cv,
+        evaluation_cv,
         hyperparameters,
     )
     return result, best_pipeline
@@ -458,7 +603,8 @@ def _train_svm(
     columns: List[str],
     y: pd.Series,
     flexibility: str,
-    cv: StratifiedKFold,
+    tuning_cv: StratifiedKFold,
+    evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
 ) -> Tuple[Dict, Pipeline]:
@@ -499,7 +645,7 @@ def _train_svm(
         default_grid,
         hard_grid,
     )
-    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, tuning_cv)
     classifier: SVC = best_pipeline.named_steps['classifier']
     hyperparameters = _format_hyperparameters(best_params, {})
     result = _evaluate_classifier(
@@ -507,7 +653,7 @@ def _train_svm(
         best_pipeline,
         df[columns],
         y,
-        cv,
+        evaluation_cv,
         hyperparameters,
     )
     return result, best_pipeline
@@ -517,7 +663,8 @@ def _train_random_forest(
     df: pd.DataFrame,
     columns: List[str],
     y: pd.Series,
-    cv: StratifiedKFold,
+    tuning_cv: StratifiedKFold,
+    evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
 ) -> Tuple[Dict, Pipeline]:
@@ -542,14 +689,14 @@ def _train_random_forest(
         default_grid,
         hard_grid,
     )
-    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, tuning_cv)
     hyperparameters = _format_hyperparameters(best_params, {})
     result = _evaluate_classifier(
         CLASSIFIER_NAMES['Random Forest'],
         best_pipeline,
         df[columns],
         y,
-        cv,
+        evaluation_cv,
         hyperparameters,
     )
     feature_importances = _extract_feature_importances(best_pipeline)
@@ -561,7 +708,8 @@ def _train_gradient_boost(
     df: pd.DataFrame,
     columns: List[str],
     y: pd.Series,
-    cv: StratifiedKFold,
+    tuning_cv: StratifiedKFold,
+    evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
 ) -> Tuple[Dict, Pipeline]:
@@ -586,7 +734,7 @@ def _train_gradient_boost(
         default_grid,
         hard_grid,
     )
-    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, tuning_cv)
     classifier: GradientBoostingClassifier = best_pipeline.named_steps['classifier']
     hyperparameters = _format_hyperparameters(best_params, {'loss': str(classifier.loss)})
     result = _evaluate_classifier(
@@ -594,7 +742,7 @@ def _train_gradient_boost(
         best_pipeline,
         df[columns],
         y,
-        cv,
+        evaluation_cv,
         hyperparameters,
     )
     feature_importances = _extract_feature_importances(best_pipeline)
@@ -606,7 +754,8 @@ def _train_elastic_net(
     df: pd.DataFrame,
     columns: List[str],
     y: pd.Series,
-    cv: StratifiedKFold,
+    tuning_cv: StratifiedKFold,
+    evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
 ) -> Tuple[Dict, Pipeline]:
@@ -634,14 +783,14 @@ def _train_elastic_net(
         default_grid,
         hard_grid,
     )
-    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, tuning_cv)
     hyperparameters = _format_hyperparameters(best_params, {'solver': 'saga'})
     result = _evaluate_classifier(
         CLASSIFIER_NAMES['Elastic Net (Logistic Regression)'],
         best_pipeline,
         df[columns],
         y,
-        cv,
+        evaluation_cv,
         hyperparameters,
     )
     return result, best_pipeline
@@ -651,7 +800,8 @@ def _train_naive_bayes(
     df: pd.DataFrame,
     columns: List[str],
     y: pd.Series,
-    cv: StratifiedKFold,
+    tuning_cv: StratifiedKFold,
+    evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
 ) -> Tuple[Dict, Pipeline]:
@@ -667,14 +817,14 @@ def _train_naive_bayes(
         default_grid,
         hard_grid,
     )
-    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, tuning_cv)
     hyperparameters = _format_hyperparameters(best_params, {})
     result = _evaluate_classifier(
         CLASSIFIER_NAMES['Naive Bayes (Gaussian)'],
         best_pipeline,
         df[columns],
         y,
-        cv,
+        evaluation_cv,
         hyperparameters,
     )
     return result, best_pipeline
@@ -684,7 +834,8 @@ def _train_xgboost(
     df: pd.DataFrame,
     columns: List[str],
     y: pd.Series,
-    cv: StratifiedKFold,
+    tuning_cv: StratifiedKFold,
+    evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
 ) -> Tuple[Dict, Pipeline]:
@@ -721,13 +872,13 @@ def _train_xgboost(
         default_grid,
         hard_grid,
     )
-    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, tuning_cv)
     result = _evaluate_classifier(
         CLASSIFIER_NAMES['XGBoost'],
         best_pipeline,
         df[columns],
         y,
-        cv,
+        evaluation_cv,
         _format_hyperparameters(best_params, {}),
     )
     feature_importances = _extract_feature_importances(best_pipeline)
@@ -739,7 +890,8 @@ def _train_lightgbm(
     df: pd.DataFrame,
     columns: List[str],
     y: pd.Series,
-    cv: StratifiedKFold,
+    tuning_cv: StratifiedKFold,
+    evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
 ) -> Tuple[Dict, Pipeline]:
@@ -772,13 +924,13 @@ def _train_lightgbm(
         default_grid,
         hard_grid,
     )
-    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, tuning_cv)
     result = _evaluate_classifier(
         CLASSIFIER_NAMES['LightGBM'],
         best_pipeline,
         df[columns],
         y,
-        cv,
+        evaluation_cv,
         _format_hyperparameters(best_params, {}),
     )
     feature_importances = _extract_feature_importances(best_pipeline)
@@ -790,7 +942,8 @@ def _train_catboost(
     df: pd.DataFrame,
     columns: List[str],
     y: pd.Series,
-    cv: StratifiedKFold,
+    tuning_cv: StratifiedKFold,
+    evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
 ) -> Tuple[Dict, Pipeline]:
@@ -821,13 +974,13 @@ def _train_catboost(
         default_grid,
         hard_grid,
     )
-    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, tuning_cv)
     result = _evaluate_classifier(
         CLASSIFIER_NAMES['CatBoost'],
         best_pipeline,
         df[columns],
         y,
-        cv,
+        evaluation_cv,
         _format_hyperparameters(best_params, {}),
     )
     feature_importances = _extract_feature_importances(best_pipeline)
@@ -839,7 +992,8 @@ def _train_voting_classifier(
     df: pd.DataFrame,
     columns: List[str],
     y: pd.Series,
-    cv: StratifiedKFold,
+    tuning_cv: StratifiedKFold,
+    evaluation_cv: StratifiedKFold,
     trained_pipelines: Dict[str, Pipeline],
     requested_models: List[str],
     processing_mode: ProcessingModeType,
@@ -862,7 +1016,7 @@ def _train_voting_classifier(
         custom_hyperparameters,
         default_grid,
     )
-    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, tuning_cv)
     hyperparameters = _format_hyperparameters(best_params, {
         'voting': voting_strategy,
         'estimators': ', '.join(name for name, _ in estimators),
@@ -872,7 +1026,7 @@ def _train_voting_classifier(
         best_pipeline,
         df[columns],
         y,
-        cv,
+        evaluation_cv,
         hyperparameters,
     )
     return result, best_pipeline
@@ -882,7 +1036,8 @@ def _train_stacking_classifier(
     df: pd.DataFrame,
     columns: List[str],
     y: pd.Series,
-    cv: StratifiedKFold,
+    tuning_cv: StratifiedKFold,
+    evaluation_cv: StratifiedKFold,
     trained_pipelines: Dict[str, Pipeline],
     requested_models: List[str],
     processing_mode: ProcessingModeType,
@@ -893,7 +1048,7 @@ def _train_stacking_classifier(
         message = 'Stacking Classifier requires at least two trained supervised models.'
         return _build_status_only_result(CLASSIFIER_NAMES['Stacking Classifier'], message), None
 
-    stacking_splits = min(5, cv.n_splits)
+    stacking_splits = min(5, tuning_cv.n_splits)
     stacking_cv = StratifiedKFold(n_splits=stacking_splits, shuffle=True, random_state=RANDOM_STATE)
     final_estimator = LogisticRegression(
         max_iter=2000,
@@ -919,7 +1074,7 @@ def _train_stacking_classifier(
         default_grid,
         hard_grid,
     )
-    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, cv)
+    best_pipeline, best_params = _grid_search(pipeline, param_grid, df[columns], y, tuning_cv)
     hyperparameters = _format_hyperparameters(best_params, {
         'estimators': ', '.join(name for name, _ in estimators),
     })
@@ -928,7 +1083,7 @@ def _train_stacking_classifier(
         best_pipeline,
         df[columns],
         y,
-        cv,
+        evaluation_cv,
         hyperparameters,
     )
     return result, best_pipeline
@@ -961,7 +1116,9 @@ def train_supervised_models(
         raise ValueError('No feature columns available for model training. Please review the cleaning step.')
     X = df[feature_columns].apply(pd.to_numeric, errors='coerce')
     y = df[entry.target_column].astype(int)
-    cv = _build_cv(y)
+    split_count = _determine_cv_splits(y)
+    tuning_cv = _build_cv(y, random_state=RANDOM_STATE, n_splits=split_count)
+    evaluation_cv = _build_cv(y, random_state=EVALUATION_RANDOM_STATE, n_splits=split_count)
 
     base_requests = [model for model in models if model in BASE_SUPERVISED_MODELS]
     ensemble_requests = [model for model in models if model in ENSEMBLE_MODELS]
@@ -972,25 +1129,25 @@ def train_supervised_models(
     for model_name in base_requests:
         try:
             if model_name == CLASSIFIER_NAMES['Logistic Regression']:
-                result, pipeline = _train_logistic(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_logistic(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['Elastic Net (Logistic Regression)']:
-                result, pipeline = _train_elastic_net(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_elastic_net(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['K-Nearest Neighbors (KNN)']:
-                result, pipeline = _train_knn(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_knn(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['Support Vector Machine (SVM)']:
-                result, pipeline = _train_svm(X, feature_columns, y, svm_flexibility, cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_svm(X, feature_columns, y, svm_flexibility, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['Random Forest']:
-                result, pipeline = _train_random_forest(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_random_forest(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['Gradient Boosting']:
-                result, pipeline = _train_gradient_boost(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_gradient_boost(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['XGBoost']:
-                result, pipeline = _train_xgboost(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_xgboost(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['LightGBM']:
-                result, pipeline = _train_lightgbm(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_lightgbm(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['CatBoost']:
-                result, pipeline = _train_catboost(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_catboost(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
             elif model_name == CLASSIFIER_NAMES['Naive Bayes (Gaussian)']:
-                result, pipeline = _train_naive_bayes(X, feature_columns, y, cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_naive_bayes(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
             else:
                 continue
         except MissingDependencyError as exc:
@@ -1006,7 +1163,8 @@ def train_supervised_models(
                 X,
                 feature_columns,
                 y,
-                cv,
+                tuning_cv,
+                evaluation_cv,
                 trained_pipelines,
                 models,
                 processing_mode,
@@ -1017,7 +1175,8 @@ def train_supervised_models(
                 X,
                 feature_columns,
                 y,
-                cv,
+                tuning_cv,
+                evaluation_cv,
                 trained_pipelines,
                 models,
                 processing_mode,

@@ -125,12 +125,19 @@ export interface ConfusionMatrix {
 export interface ModelMetrics {
     confusionMatrix: ConfusionMatrix;
     sensitivity: number;
+    sensitivityStd?: number | null;
     specificity: number;
+    specificityStd?: number | null;
     vpp: number;
+    vppStd?: number | null;
     vpn: number;
+    vpnStd?: number | null;
     f1Score: number;
-    auc: number;
+    f1ScoreStd?: number | null;
+    auc: number | null;
+    aucStd?: number | null;
     accuracy: number;
+    accuracyStd?: number | null;
 }
 
 export interface RocPoint {

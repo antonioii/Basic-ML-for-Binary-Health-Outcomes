@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import { ModelResult } from "../types";
+import { ModelResult, ModelMetrics } from "../types";
 import { marked } from 'marked';
 
 // IMPORTANT: This service assumes the API_KEY is available as an environment variable.
@@ -12,17 +12,20 @@ if(API_KEY) {
     ai = new GoogleGenAI({ apiKey: API_KEY });
 }
 
+const hasValidAuc = (metrics?: ModelMetrics | null): metrics is ModelMetrics & { auc: number } =>
+  typeof metrics?.auc === 'number' && !Number.isNaN(metrics.auc);
+
 export const generateSummary = async (results: ModelResult[]): Promise<string> => {
     if (!ai) {
         return Promise.resolve("<h2>Gemini API not configured</h2><p>Please provide an API key to enable this feature.</p>");
     }
 
-    const supervisedResults = results.filter(r => r.metrics);
+    const supervisedResults = results.filter((r): r is ModelResult & { metrics: ModelMetrics & { auc: number } } => hasValidAuc(r.metrics));
     if(supervisedResults.length === 0) {
         return Promise.resolve("<p>No supervised models were trained, so no summary can be generated.</p>");
     }
 
-    const bestModel = supervisedResults.reduce((best, current) => (current.metrics!.auc > best.metrics!.auc ? current : best));
+    const bestModel = supervisedResults.reduce((best, current) => (current.metrics.auc > best.metrics.auc ? current : best));
 
     const prompt = `
         As an expert data scientist specializing in clinical epidemiology, analyze the following machine learning model results. 
@@ -35,11 +38,11 @@ export const generateSummary = async (results: ModelResult[]): Promise<string> =
         **Model Performance Data:**
         ${supervisedResults.map(r => `
         - **Model: ${r.name}**
-          - AUC: ${r.metrics!.auc.toFixed(3)}
-          - Accuracy: ${(r.metrics!.accuracy * 100).toFixed(1)}%
-          - Sensitivity (Recall): ${r.metrics!.sensitivity.toFixed(3)}
-          - Specificity: ${r.metrics!.specificity.toFixed(3)}
-          - F1-Score: ${r.metrics!.f1Score.toFixed(3)}
+          - AUC: ${r.metrics.auc.toFixed(3)}
+          - Accuracy: ${(r.metrics.accuracy * 100).toFixed(1)}%
+          - Sensitivity (Recall): ${r.metrics.sensitivity.toFixed(3)}
+          - Specificity: ${r.metrics.specificity.toFixed(3)}
+          - F1-Score: ${r.metrics.f1Score.toFixed(3)}
         `).join('')}
 
         **Your Task:**

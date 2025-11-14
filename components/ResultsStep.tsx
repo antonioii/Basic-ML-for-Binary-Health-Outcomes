@@ -20,6 +20,17 @@ interface ResultsStepProps {
 
 const colors = ["#8884d8", "#82ca9d", "#ffc658", "#ff8042", "#0088FE", "#00C49F"];
 
+type MetricColumnKey = 'auc' | 'accuracy' | 'sensitivity' | 'specificity' | 'vpp' | 'vpn' | 'f1Score';
+type MetricStdColumnKey = 'aucStd' | 'accuracyStd' | 'sensitivityStd' | 'specificityStd' | 'vppStd' | 'vpnStd' | 'f1ScoreStd';
+
+const hasValidAuc = (metrics?: ModelMetrics | null): metrics is ModelMetrics & { auc: number } =>
+  typeof metrics?.auc === 'number' && !Number.isNaN(metrics.auc);
+
+const isRocEligible = (result: ModelResult): result is ModelResult & {
+  metrics: ModelMetrics & { auc: number };
+  rocCurve: NonNullable<ModelResult['rocCurve']>;
+} => Array.isArray(result.rocCurve) && hasValidAuc(result.metrics);
+
 const MetricCard: React.FC<{ title: string, value: string | number }> = ({ title, value }) => (
     <div className="bg-gray-50 p-3 rounded-lg text-center border">
         <p className="text-xs text-gray-500 uppercase font-semibold">{title}</p>
@@ -65,6 +76,22 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
   const rocContainerRef = useRef<HTMLDivElement | null>(null);
   const trainingEstimate = useMemo(() => buildTrainingEstimate(dataSet, trainingConfig), [dataSet, trainingConfig]);
   const formattedEstimate = useMemo(() => formatTrainingTime(trainingEstimate.totalSeconds), [trainingEstimate.totalSeconds]);
+  const formatMetricWithStd = useCallback((
+    value: number | null | undefined,
+    std?: number | null,
+    formatValue?: (val: number) => string,
+    formatStd?: (val: number) => string,
+  ) => {
+    if (value == null || Number.isNaN(value)) {
+      return 'N/A';
+    }
+    const formattedValue = formatValue ? formatValue(value) : value.toFixed(3);
+    if (std == null || Number.isNaN(std)) {
+      return formattedValue;
+    }
+    const formattedStd = formatStd ? formatStd(std) : std.toFixed(3);
+    return `${formattedValue} ± ${formattedStd}`;
+  }, []);
 
   useEffect(() => {
     if(!results){
@@ -137,10 +164,10 @@ const ResultsStep: React.FC<ResultsStepProps> = ({ dataSet, trainingConfig, resu
 
   const getBestModel = useCallback(() => {
     if (!results) return null;
-    const candidates = results.filter(r => r.metrics?.auc);
+    const candidates = results.filter((r): r is ModelResult & { metrics: ModelMetrics & { auc: number } } => hasValidAuc(r.metrics));
     if (candidates.length === 0) return null;
     return candidates.slice(1).reduce(
-      (best, current) => (current.metrics!.auc > best.metrics!.auc ? current : best),
+      (best, current) => (current.metrics.auc > best.metrics.auc ? current : best),
       candidates[0],
     );
   }, [results]);
@@ -261,7 +288,7 @@ const handleDownloadRocPng = useCallback(() => {
   }
   
   const supervisedResults = results.filter(r => r.name !== 'K-Means Clustering');
-  const rocEligibleResults = supervisedResults.filter(r => r.metrics && r.rocCurve);
+  const rocEligibleResults = supervisedResults.filter(isRocEligible);
   const kMeansResult = results.find(r => r.name === 'K-Means Clustering')?.kMeansResult;
 
   const renderComparisonTable = () => (
@@ -276,13 +303,21 @@ const handleDownloadRocPng = useCallback(() => {
                         <ConfusionMatrixDisplay cm={result.metrics.confusionMatrix} />
                     </div>
                     <div className="lg:col-span-3 grid grid-cols-2 sm:grid-cols-3 gap-3">
-                        <MetricCard title="AUC" value={result.metrics.auc.toFixed(3)} />
-                        <MetricCard title="Accuracy" value={`${(result.metrics.accuracy * 100).toFixed(1)}%`} />
-                        <MetricCard title="F1-Score" value={result.metrics.f1Score.toFixed(3)} />
-                        <MetricCard title="Sensitivity" value={result.metrics.sensitivity.toFixed(3)} />
-                        <MetricCard title="Specificity" value={result.metrics.specificity.toFixed(3)} />
-                        <MetricCard title="VPP / Precision" value={result.metrics.vpp.toFixed(3)} />
-                        <MetricCard title="VPN" value={result.metrics.vpn.toFixed(3)} />
+                        <MetricCard title="AUC" value={formatMetricWithStd(result.metrics.auc, result.metrics.aucStd)} />
+                        <MetricCard
+                          title="Accuracy"
+                          value={formatMetricWithStd(
+                            result.metrics.accuracy,
+                            result.metrics.accuracyStd,
+                            (v) => `${(v * 100).toFixed(1)}%`,
+                            (std) => `${(std * 100).toFixed(1)}%`,
+                          )}
+                        />
+                        <MetricCard title="F1-Score" value={formatMetricWithStd(result.metrics.f1Score, result.metrics.f1ScoreStd)} />
+                        <MetricCard title="Sensitivity" value={formatMetricWithStd(result.metrics.sensitivity, result.metrics.sensitivityStd)} />
+                        <MetricCard title="Specificity" value={formatMetricWithStd(result.metrics.specificity, result.metrics.specificityStd)} />
+                        <MetricCard title="VPP / Precision" value={formatMetricWithStd(result.metrics.vpp, result.metrics.vppStd)} />
+                        <MetricCard title="VPN" value={formatMetricWithStd(result.metrics.vpn, result.metrics.vpnStd)} />
                     </div>
                     {Object.keys(result.hyperparameters || {}).length > 0 && (
                       <div className="lg:col-span-4 mt-4">
@@ -428,26 +463,44 @@ const handleDownloadRocPng = useCallback(() => {
 
   const handleDownloadReport = () => {
     if (!results) return;
-    const header = ['Model', 'AUC', 'Accuracy', 'Sensitivity', 'Specificity', 'VPP', 'VPN', 'F1', 'TP', 'FP', 'TN', 'FN', 'Hyperparameters'];
+    const metricColumns: { label: string; key: MetricColumnKey; stdKey: MetricStdColumnKey }[] = [
+      { label: 'AUC', key: 'auc', stdKey: 'aucStd' },
+      { label: 'Accuracy', key: 'accuracy', stdKey: 'accuracyStd' },
+      { label: 'Sensitivity', key: 'sensitivity', stdKey: 'sensitivityStd' },
+      { label: 'Specificity', key: 'specificity', stdKey: 'specificityStd' },
+      { label: 'VPP', key: 'vpp', stdKey: 'vppStd' },
+      { label: 'VPN', key: 'vpn', stdKey: 'vpnStd' },
+      { label: 'F1', key: 'f1Score', stdKey: 'f1ScoreStd' },
+    ];
+    const formatCsvMetric = (value: number | null | undefined, decimals = 4) => (
+      typeof value === 'number' && !Number.isNaN(value) ? value.toFixed(decimals) : 'N/A'
+    );
+    const header = [
+      'Model',
+      ...metricColumns.flatMap(({ label }) => [label, `${label}_SD`]),
+      'TP',
+      'FP',
+      'TN',
+      'FN',
+      'Hyperparameters',
+    ];
     const rows = [header];
     results.filter(r => r.metrics).forEach(result => {
       const metrics = result.metrics!;
       const hyperparams = formatHyperparameters(result.hyperparameters);
-      rows.push([
-        result.name,
-        metrics.auc.toFixed(4),
-        metrics.accuracy.toFixed(4),
-        metrics.sensitivity.toFixed(4),
-        metrics.specificity.toFixed(4),
-        metrics.vpp.toFixed(4),
-        metrics.vpn.toFixed(4),
-        metrics.f1Score.toFixed(4),
+      const row = [result.name];
+      metricColumns.forEach(({ key, stdKey }) => {
+        row.push(formatCsvMetric(metrics[key]));
+        row.push(formatCsvMetric(metrics[stdKey]));
+      });
+      row.push(
         metrics.confusionMatrix.tp.toString(),
         metrics.confusionMatrix.fp.toString(),
         metrics.confusionMatrix.tn.toString(),
         metrics.confusionMatrix.fn.toString(),
         hyperparams,
-      ]);
+      );
+      rows.push(row);
     });
     const csv = rows.map(row => row.join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -479,7 +532,10 @@ const handleDownloadRocPng = useCallback(() => {
                     <Award className="w-10 h-10 text-blue-600 flex-shrink-0" />
                     <div>
                         <h4 className="font-bold text-blue-800">Best Performing Model</h4>
-                        <p className="text-gray-700">Based on AUC, <strong>{bestModel.name}</strong> performed the best with an AUC of <strong>{bestModel.metrics?.auc.toFixed(3)}</strong>.</p>
+                        <p className="text-gray-700">
+                          Based on AUC, <strong>{bestModel.name}</strong> performed the best with an AUC of{' '}
+                          <strong>{typeof bestModel.metrics?.auc === 'number' ? bestModel.metrics.auc.toFixed(3) : 'N/A'}</strong>.
+                        </p>
                         {Object.keys(bestModel.hyperparameters || {}).length > 0 && (
                           <p className="text-sm text-blue-900 mt-2">Key hyperparameters: {formatHyperparameters(bestModel.hyperparameters)}</p>
                         )}
