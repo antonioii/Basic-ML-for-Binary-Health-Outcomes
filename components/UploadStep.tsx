@@ -1,17 +1,20 @@
 
 import React, { useState, useCallback, useRef } from 'react';
-import { DataSet, DataRow } from '../types';
+import { DataSet, DataRow, ProcessingMode } from '../types';
 import { UploadCloud, FileCheck2, AlertTriangle } from 'lucide-react';
 import Spinner from './common/Spinner';
 import Card from './common/Card';
 import { uploadDataset } from '../services/edaService';
+import ProcessingModeSelector from './common/ProcessingModeSelector';
 
 
 interface UploadStepProps {
   onDataUploaded: (dataSet: DataSet) => void;
+  processingMode: ProcessingMode;
+  onProcessingModeChange: (mode: ProcessingMode) => void;
 }
 
-const UploadStep: React.FC<UploadStepProps> = ({ onDataUploaded }) => {
+const UploadStep: React.FC<UploadStepProps> = ({ onDataUploaded, processingMode, onProcessingModeChange }) => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -84,6 +87,15 @@ const UploadStep: React.FC<UploadStepProps> = ({ onDataUploaded }) => {
       <div className="text-center">
         <h2 className="text-2xl font-bold text-gray-800 mb-2">Upload Your Dataset</h2>
         <p className="text-gray-600 mb-6">Select a pre-processed database file to begin the analysis.</p>
+
+        <div className="mb-8 text-left">
+          <h3 className="text-lg font-semibold text-gray-800 mb-3">Processing Intensity</h3>
+          <ProcessingModeSelector value={processingMode} onChange={onProcessingModeChange} />
+          <p className="mt-2 text-sm text-gray-500">
+            Light Processing keeps the curated default grids. Hard Processing expands every search grid for thorough
+            experimentation, while Custom lets you define the exact hyperparameter values later during configuration.
+          </p>
+        </div>
         
         <div
           className={`border-2 border-dashed rounded-lg p-8 transition-colors duration-300 ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-gray-50 hover:border-blue-500'}`}

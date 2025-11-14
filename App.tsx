@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { AppStep, DataSet, EdaResult, ModelResult, TrainingConfig } from './types';
+import { AppStep, DataSet, EdaResult, ModelResult, ProcessingMode, TrainingConfig } from './types';
 import UploadStep from './components/UploadStep';
 import EdaStep from './components/EdaStep';
 import CleaningStep from './components/CleaningStep';
@@ -16,6 +16,7 @@ const App: React.FC = () => {
   const [cleanedDataSet, setCleanedDataSet] = useState<DataSet | null>(null);
   const [trainingConfig, setTrainingConfig] = useState<TrainingConfig | null>(null);
   const [modelResults, setModelResults] = useState<ModelResult[] | null>(null);
+  const [processingMode, setProcessingMode] = useState<ProcessingMode>(ProcessingMode.LIGHT);
 
   const handleDataUploaded = (data: DataSet) => {
     setDataSet(data);
@@ -53,7 +54,13 @@ const App: React.FC = () => {
   const renderStep = () => {
     switch (currentStep) {
       case AppStep.Upload:
-        return <UploadStep onDataUploaded={handleDataUploaded} />;
+        return (
+          <UploadStep
+            onDataUploaded={handleDataUploaded}
+            processingMode={processingMode}
+            onProcessingModeChange={setProcessingMode}
+          />
+        );
       case AppStep.EDA:
         if (dataSet) {
           return <EdaStep dataSet={dataSet} onEdaComplete={handleEdaComplete} />;
@@ -66,7 +73,14 @@ const App: React.FC = () => {
         return null;
       case AppStep.Configuration:
         if (cleanedDataSet) {
-          return <TrainingConfigStep dataSet={cleanedDataSet} onConfigComplete={handleConfigComplete} />;
+          return (
+            <TrainingConfigStep
+              dataSet={cleanedDataSet}
+              onConfigComplete={handleConfigComplete}
+              processingMode={processingMode}
+              onProcessingModeChange={setProcessingMode}
+            />
+          );
         }
         return null;
       case AppStep.Results:
@@ -80,7 +94,13 @@ const App: React.FC = () => {
         }
         return null;
       default:
-        return <UploadStep onDataUploaded={handleDataUploaded} />;
+        return (
+          <UploadStep
+            onDataUploaded={handleDataUploaded}
+            processingMode={processingMode}
+            onProcessingModeChange={setProcessingMode}
+          />
+        );
     }
   };
 

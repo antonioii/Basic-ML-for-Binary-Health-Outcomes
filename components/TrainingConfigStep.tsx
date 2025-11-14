@@ -1,15 +1,18 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { DataSet, SvmFlexibility, TrainingConfig } from '../types';
+import { CustomHyperparameterConfig, DataSet, ProcessingMode, SvmFlexibility, TrainingConfig } from '../types';
 import { fetchKMeansElbow } from '../services/mlService';
 import Card from './common/Card';
 import Button from './common/Button';
 import { SlidersHorizontal, BarChart2 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import ProcessingModeSelector from './common/ProcessingModeSelector';
 
 interface TrainingConfigStepProps {
   dataSet: DataSet;
   onConfigComplete: (config: TrainingConfig) => void;
+  processingMode: ProcessingMode;
+  onProcessingModeChange: (mode: ProcessingMode) => void;
 }
 
 interface ModelOption {
@@ -37,9 +40,76 @@ const MODEL_OPTIONS: ModelOption[] = [
 
 const DEFAULT_SELECTED_MODELS = MODEL_OPTIONS.filter(option => option.defaultSelected).map(option => option.value);
 
-const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConfigComplete }) => {
+interface HyperparameterField {
+  name: string;
+  label: string;
+  placeholder: string;
+  helper?: string;
+}
+
+const MODEL_HYPERPARAMETERS: Record<string, HyperparameterField[]> = {
+  'Logistic Regression': [
+    { name: 'C', label: 'Regularization strength (C)', placeholder: '0.01, 0.1, 1, 10' },
+  ],
+  'Elastic Net (Logistic Regression)': [
+    { name: 'C', label: 'Regularization strength (C)', placeholder: '0.01, 0.1, 1' },
+    { name: 'l1_ratio', label: 'L1 Ratio', placeholder: '0.2, 0.5, 0.8' },
+  ],
+  'K-Nearest Neighbors (KNN)': [
+    { name: 'n_neighbors', label: 'Neighbors (odd numbers recommended)', placeholder: '3, 5, 7, 9, 11' },
+    { name: 'weights', label: 'Weights', placeholder: 'uniform, distance', helper: 'Comma-separated values' },
+  ],
+  'Support Vector Machine (SVM)': [
+    { name: 'C', label: 'Regularization strength (C)', placeholder: '0.1, 1, 10, 50' },
+    { name: 'gamma', label: 'Gamma', placeholder: '0.001, 0.01, 0.1' },
+    { name: 'kernel', label: 'Kernel', placeholder: 'rbf, linear' },
+  ],
+  'Random Forest': [
+    { name: 'n_estimators', label: 'Number of Trees', placeholder: '200, 400' },
+    { name: 'max_depth', label: 'Max Depth', placeholder: 'None, 10, 20' },
+    { name: 'min_samples_split', label: 'Min Samples Split', placeholder: '2, 5' },
+    { name: 'min_samples_leaf', label: 'Min Samples Leaf', placeholder: '1, 2, 4' },
+  ],
+  'Gradient Boosting': [
+    { name: 'learning_rate', label: 'Learning Rate', placeholder: '0.05, 0.1' },
+    { name: 'n_estimators', label: 'Estimators', placeholder: '100, 200' },
+    { name: 'max_depth', label: 'Max Depth', placeholder: '3, 5' },
+    { name: 'subsample', label: 'Subsample', placeholder: '1.0, 0.8' },
+  ],
+  'XGBoost': [
+    { name: 'n_estimators', label: 'Estimators', placeholder: '200, 400' },
+    { name: 'max_depth', label: 'Max Depth', placeholder: '3, 5' },
+    { name: 'learning_rate', label: 'Learning Rate', placeholder: '0.05, 0.1' },
+    { name: 'subsample', label: 'Subsample', placeholder: '0.8, 1.0' },
+    { name: 'colsample_bytree', label: 'Column Subsample', placeholder: '0.7, 0.9, 1.0' },
+  ],
+  'LightGBM': [
+    { name: 'n_estimators', label: 'Estimators', placeholder: '200, 400' },
+    { name: 'learning_rate', label: 'Learning Rate', placeholder: '0.05, 0.1' },
+    { name: 'num_leaves', label: 'Num Leaves', placeholder: '31, 63' },
+    { name: 'max_depth', label: 'Max Depth', placeholder: '-1, 15' },
+    { name: 'subsample', label: 'Subsample', placeholder: '0.8, 1.0' },
+  ],
+  'CatBoost': [
+    { name: 'iterations', label: 'Iterations', placeholder: '200, 400' },
+    { name: 'learning_rate', label: 'Learning Rate', placeholder: '0.05, 0.1' },
+    { name: 'depth', label: 'Depth', placeholder: '4, 6' },
+    { name: 'l2_leaf_reg', label: 'L2 Leaf Reg', placeholder: '3, 5, 7' },
+  ],
+  'Naive Bayes (Gaussian)': [
+    { name: 'var_smoothing', label: 'Variance Smoothing', placeholder: '1e-9, 1e-8, 1e-7' },
+  ],
+  'Stacking Classifier': [
+    { name: 'final_estimator__C', label: 'Meta-estimator C', placeholder: '0.5, 1.0' },
+  ],
+};
+
+type CustomHyperparamInputs = Record<string, Record<string, string>>;
+
+const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConfigComplete, processingMode, onProcessingModeChange }) => {
   const [selectedModels, setSelectedModels] = useState<string[]>(DEFAULT_SELECTED_MODELS);
   const [svmFlexibility, setSvmFlexibility] = useState<SvmFlexibility>(SvmFlexibility.MEDIUM);
+  const [customInputs, setCustomInputs] = useState<CustomHyperparamInputs>({});
   
   const [elbowData, setElbowData] = useState<{ k: number; inertia: number }[]>([]);
   const [elbowLoading, setElbowLoading] = useState<boolean>(false);
@@ -80,10 +150,70 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
     setKMeansClusters(suggestedK);
   }, [suggestedK]);
 
+  useEffect(() => {
+    setCustomInputs(prev => {
+      const next: CustomHyperparamInputs = { ...prev };
+      Object.keys(next).forEach(model => {
+        if (!selectedModels.includes(model)) {
+          delete next[model];
+        }
+      });
+      selectedModels.forEach(model => {
+        const fields = MODEL_HYPERPARAMETERS[model];
+        if (!fields || fields.length === 0) {
+          return;
+        }
+        if (!next[model]) {
+          next[model] = {};
+        }
+        fields.forEach(field => {
+          if (!(field.name in next[model])) {
+            next[model][field.name] = '';
+          }
+        });
+      });
+      return next;
+    });
+  }, [selectedModels]);
+
   const handleModelToggle = (model: string) => {
     setSelectedModels(prev =>
       prev.includes(model) ? prev.filter(m => m !== model) : [...prev, model]
     );
+  };
+
+  const handleCustomInputChange = (model: string, field: string, value: string) => {
+    setCustomInputs(prev => ({
+      ...prev,
+      [model]: {
+        ...(prev[model] || {}),
+        [field]: value,
+      },
+    }));
+  };
+
+  const buildCustomPayload = (): CustomHyperparameterConfig | undefined => {
+    if (processingMode !== ProcessingMode.CUSTOM) {
+      return undefined;
+    }
+    const payload: CustomHyperparameterConfig = {};
+    Object.entries(customInputs).forEach(([model, params]) => {
+      const fields = MODEL_HYPERPARAMETERS[model];
+      if (!fields || fields.length === 0) {
+        return;
+      }
+      const cleaned: Record<string, (string | number | boolean | null)[]> = {};
+      Object.entries(params).forEach(([param, raw]) => {
+        const tokens = raw.split(',').map(token => token.trim()).filter(Boolean);
+        if (tokens.length > 0) {
+          cleaned[param] = tokens;
+        }
+      });
+      if (Object.keys(cleaned).length > 0) {
+        payload[model] = cleaned;
+      }
+    });
+    return Object.keys(payload).length > 0 ? payload : undefined;
   };
   
   const handleSubmit = () => {
@@ -91,6 +221,8 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
       models: selectedModels,
       svmFlexibility,
       kMeansClusters,
+      processingMode,
+      customHyperparameters: buildCustomPayload(),
     });
   };
 
@@ -103,6 +235,15 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
       <p className="text-gray-600 mb-8">
         Select the models to train and specify any required configurations.
       </p>
+
+      <div className="mb-10">
+        <h3 className="text-lg font-semibold text-gray-800 mb-3">Processing Intensity</h3>
+        <ProcessingModeSelector value={processingMode} onChange={onProcessingModeChange} />
+        <p className="mt-2 text-sm text-gray-500">
+          Light maintains the curated defaults. Hard expands every grid for more exhaustive searches, which can take hours
+          on large datasets. Custom lets you provide comma-separated hyperparameter values for each model below.
+        </p>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div>
@@ -189,6 +330,61 @@ const TrainingConfigStep: React.FC<TrainingConfigStepProps> = ({ dataSet, onConf
           </div>
         </div>
       </div>
+
+      {processingMode === ProcessingMode.CUSTOM && (
+        <div className="mt-10 border-t border-gray-200 pt-8 space-y-6">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-800">Custom Hyperparameters</h3>
+            <p className="text-sm text-gray-500 mt-1">
+              Enter comma-separated values for each parameter (e.g., <span className="font-mono">0.01, 0.1, 1</span>). Use{' '}
+              <span className="font-mono">None</span> to include null values or booleans like <span className="font-mono">true</span>.
+            </p>
+          </div>
+          {selectedModels.map(model => {
+            const fields = MODEL_HYPERPARAMETERS[model] || [];
+            const values = customInputs[model] || {};
+            return (
+              <div key={model} className="rounded-xl border border-gray-200 bg-white p-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-base font-semibold text-gray-800">{model}</h4>
+                  <span className="text-xs uppercase tracking-wide text-gray-500">
+                    {fields.length ? 'Custom grid' : 'Defaults applied'}
+                  </span>
+                </div>
+                {fields.length === 0 ? (
+                  <p className="mt-3 text-sm text-gray-500">
+                    This model currently uses a fixed configuration. No manual hyperparameters are exposed.
+                  </p>
+                ) : (
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    {fields.map(field => {
+                      const inputId = `${model}-${field.name}`.replace(/\s+/g, '-').toLowerCase();
+                      return (
+                        <div key={`${model}-${field.name}`}>
+                          <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor={inputId}>
+                            {field.label}
+                          </label>
+                          <input
+                            id={inputId}
+                            type="text"
+                            value={values[field.name] ?? ''}
+                            onChange={(event) => handleCustomInputChange(model, field.name, event.target.value)}
+                            placeholder={field.placeholder}
+                            className="w-full rounded-md border border-gray-300 bg-gray-50 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
+                          />
+                          <p className="mt-1 text-xs text-gray-500">
+                            {field.helper || 'Comma-separated values'}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <div className="flex justify-end mt-10">
         <Button onClick={handleSubmit} text="Train & Evaluate Models" disabled={selectedModels.length === 0} />
