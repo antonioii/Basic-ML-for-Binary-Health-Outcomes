@@ -20,6 +20,10 @@ export const trainModels = async (
     payload.customHyperparameters = config.customHyperparameters;
   }
 
+  if (config.classBalance) {
+    payload.classBalance = config.classBalance;
+  }
+
   const response = await apiClient.post<TrainingResponse>(`/datasets/${dataSet.datasetId}/train`, {
     ...payload,
   });

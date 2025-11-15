@@ -107,12 +107,23 @@ export type CustomHyperparameterValues = (string | number | boolean | null)[];
 
 export type CustomHyperparameterConfig = Record<string, Record<string, CustomHyperparameterValues>>;
 
+export enum ClassBalanceMethod {
+  SMOTE = 'smote',
+  OVERSAMPLE = 'oversample',
+}
+
+export interface ClassBalanceConfig {
+  enabled: boolean;
+  method: ClassBalanceMethod;
+}
+
 export interface TrainingConfig {
-    models: string[];
-    svmFlexibility: SvmFlexibility;
-    kMeansClusters: number;
-    processingMode: ProcessingMode;
-    customHyperparameters?: CustomHyperparameterConfig;
+  models: string[];
+  svmFlexibility: SvmFlexibility;
+  kMeansClusters: number;
+  processingMode: ProcessingMode;
+  customHyperparameters?: CustomHyperparameterConfig;
+  classBalance?: ClassBalanceConfig;
 }
 
 export interface ConfusionMatrix {

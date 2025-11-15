@@ -161,6 +161,7 @@ def train(dataset_id: str, config: TrainingConfigRequest) -> TrainingResponse:
             config.kMeansClusters,
             config.processingMode,
             config.customHyperparameters,
+            config.classBalance,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

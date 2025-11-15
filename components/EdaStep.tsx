@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { DataSet, EdaResult, HistogramInfo, BoxPlotInfo } from '../types';
+import { ClassBalanceMethod, DataSet, EdaResult, HistogramInfo, BoxPlotInfo } from '../types';
 import { fetchEda } from '../services/edaService';
 import Spinner from './common/Spinner';
 import Card from './common/Card';
@@ -11,9 +11,11 @@ import { ResponsiveContainer, BarChart as ReBarChart, Bar, XAxis, YAxis, Tooltip
 interface EdaStepProps {
   dataSet: DataSet;
   onEdaComplete: (result: EdaResult) => void;
+  classBalanceMethod: ClassBalanceMethod;
+  onClassBalanceMethodChange: (method: ClassBalanceMethod) => void;
 }
 
-const EdaStep: React.FC<EdaStepProps> = ({ dataSet, onEdaComplete }) => {
+const EdaStep: React.FC<EdaStepProps> = ({ dataSet, onEdaComplete, classBalanceMethod, onClassBalanceMethodChange }) => {
   const [loading, setLoading] = useState(true);
   const [edaResult, setEdaResult] = useState<EdaResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -163,7 +165,38 @@ const EdaStep: React.FC<EdaStepProps> = ({ dataSet, onEdaComplete }) => {
                     Class 1: {targetDistribution['1']}
                 </div>
             </div>
-            {targetDistribution.imbalance && <p className="text-yellow-700 mt-3 text-sm">Note: Significant class imbalance detected. This may affect model performance.</p>}
+            {targetDistribution.imbalance && (
+              <>
+                <p className="text-yellow-700 mt-3 text-sm">Note: Significant class imbalance detected. This may affect model performance.</p>
+                <div className="mt-4 border border-blue-100 rounded-lg p-4 bg-blue-50">
+                  <p className="text-sm font-medium text-gray-800 mb-2">Balance strategy for validation folds</p>
+                  <div className="space-y-3 sm:space-y-0 sm:flex sm:space-x-4">
+                    <label className="flex items-center text-sm text-gray-700 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="balance-method"
+                        className="h-4 w-4 text-blue-600 border-gray-300"
+                        value={ClassBalanceMethod.OVERSAMPLE}
+                        checked={classBalanceMethod === ClassBalanceMethod.OVERSAMPLE}
+                        onChange={() => onClassBalanceMethodChange(ClassBalanceMethod.OVERSAMPLE)}
+                      />
+                      <span className="ml-2">Use oversample to balance</span>
+                    </label>
+                    <label className="flex items-center text-sm text-gray-700 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="balance-method"
+                        className="h-4 w-4 text-blue-600 border-gray-300"
+                        value={ClassBalanceMethod.SMOTE}
+                        checked={classBalanceMethod === ClassBalanceMethod.SMOTE}
+                        onChange={() => onClassBalanceMethodChange(ClassBalanceMethod.SMOTE)}
+                      />
+                      <span className="ml-2">Use SMOTE to balance</span>
+                    </label>
+                  </div>
+                </div>
+              </>
+            )}
         </Card>
         <Card>
             <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center"><AlertCircle className="w-5 h-5 mr-2 text-yellow-600"/>Missing Values</h3>
