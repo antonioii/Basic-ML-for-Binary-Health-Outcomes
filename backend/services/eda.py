@@ -9,7 +9,7 @@ import pandas as pd
 from ..dataset_store import DatasetEntry
 
 CORRELATION_THRESHOLD = 0.8
-IMBALANCE_THRESHOLD = 0.2
+IMBALANCE_THRESHOLD = 0.47
 LOW_CARDINALITY_THRESHOLD = 15
 HISTOGRAM_BINS = 20
 
