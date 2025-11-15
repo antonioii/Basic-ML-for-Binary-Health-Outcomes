@@ -127,12 +127,18 @@ CustomHyperparameterValue = Union[str, float, int, bool, None]
 CustomHyperparameterGrid = Dict[str, Dict[str, List[CustomHyperparameterValue]]]
 
 
+class ClassBalanceRequest(BaseModel):
+    enabled: bool = True
+    method: str
+
+
 class TrainingConfigRequest(BaseModel):
     models: List[str]
     svmFlexibility: str = Field(..., alias='svmFlexibility')
     kMeansClusters: int = Field(..., alias='kMeansClusters')
     processingMode: str = Field(default='light', alias='processingMode')
     customHyperparameters: Optional[CustomHyperparameterGrid] = Field(default=None, alias='customHyperparameters')
+    classBalance: Optional[ClassBalanceRequest] = Field(default=None, alias='classBalance')
 
 
 class ConfusionMatrix(BaseModel):

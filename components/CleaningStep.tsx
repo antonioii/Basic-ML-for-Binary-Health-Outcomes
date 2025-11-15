@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { DataSet, EdaResult, CleaningSuggestion, CleaningSummary } from '../types';
+import { ClassBalanceMethod, DataSet, EdaResult, CleaningSuggestion, CleaningSummary } from '../types';
 import { applyCleaning } from '../services/dataService';
 import Card from './common/Card';
 import Button from './common/Button';
@@ -11,6 +11,9 @@ interface CleaningStepProps {
   dataSet: DataSet;
   edaResult: EdaResult;
   onCleaningComplete: (cleanedDataSet: DataSet) => void;
+  classBalanceMethod: ClassBalanceMethod;
+  classBalanceEnabled: boolean;
+  onClassBalanceEnabledChange: (enabled: boolean) => void;
 }
 
 const SuggestionItem: React.FC<{suggestion: CleaningSuggestion, checked: boolean, onChange: () => void}> = ({ suggestion, checked, onChange }) => {
@@ -50,7 +53,14 @@ const SuggestionItem: React.FC<{suggestion: CleaningSuggestion, checked: boolean
 };
 
 
-const CleaningStep: React.FC<CleaningStepProps> = ({ dataSet, edaResult, onCleaningComplete }) => {
+const CleaningStep: React.FC<CleaningStepProps> = ({
+  dataSet,
+  edaResult,
+  onCleaningComplete,
+  classBalanceMethod,
+  classBalanceEnabled,
+  onClassBalanceEnabledChange,
+}) => {
   const [suggestions, setSuggestions] = useState<CleaningSuggestion[]>(edaResult.cleaningSuggestions.map(s => ({ ...s, apply: true })));
   const [cleaningSummary, setCleaningSummary] = useState<CleaningSummary | null>(null);
   const [loading, setLoading] = useState(false);
@@ -114,6 +124,31 @@ const CleaningStep: React.FC<CleaningStepProps> = ({ dataSet, edaResult, onClean
       <p className="text-gray-600 mb-6">
         Based on the EDA, we recommend the following actions. Uncheck any you wish to skip.
       </p>
+
+      {edaResult.targetDistribution.imbalance && (
+        <div className="mb-6">
+          <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <div className="flex items-start">
+              <input
+                type="checkbox"
+                id="balance-strategy-toggle"
+                checked={classBalanceEnabled}
+                onChange={() => onClassBalanceEnabledChange(!classBalanceEnabled)}
+                className="h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 mt-1"
+              />
+              <div className="ml-3 text-sm flex-1">
+                <label htmlFor="balance-strategy-toggle" className="font-medium text-gray-800 cursor-pointer">
+                  Apply SMOTE / Oversample in folds for proper validation
+                </label>
+                <p className="text-xs text-gray-500 mt-1">
+                  Currently selected: {classBalanceMethod === ClassBalanceMethod.SMOTE ? 'SMOTE' : 'Random Oversample'}.
+                  Adjust the method in the EDA step if needed.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {suggestions.length > 0 ? (
         <div className="space-y-4">

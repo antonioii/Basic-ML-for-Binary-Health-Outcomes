@@ -32,6 +32,14 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
+try:
+    from imblearn.over_sampling import RandomOverSampler, SMOTE
+    from imblearn.pipeline import Pipeline as ImbalancedPipeline
+except ImportError:  # pragma: no cover - optional dependency
+    RandomOverSampler = None  # type: ignore[assignment]
+    SMOTE = None  # type: ignore[assignment]
+    ImbalancedPipeline = None  # type: ignore[assignment]
+
 from ..dataset_store import DatasetEntry
 
 CLASSIFIER_NAMES = {
@@ -72,6 +80,7 @@ RANDOM_STATE = 42
 EVALUATION_RANDOM_STATE = 137
 ProcessingModeType = Literal['light', 'hard', 'custom']
 CustomGridSpec = Dict[str, Dict[str, List[Any]]]
+BalanceStrategy = Literal['smote', 'oversample']
 
 
 def _normalize_processing_mode(value: str) -> ProcessingModeType:
@@ -109,6 +118,59 @@ def _coerce_custom_value(value: Any) -> Any:
         except ValueError:
             return candidate
     return value
+
+
+def _normalize_balance_strategy(config: Optional[Any]) -> Optional[BalanceStrategy]:
+    if config is None:
+        return None
+    data = config.dict() if hasattr(config, 'dict') else config
+    if not isinstance(data, dict) or not bool(data.get('enabled', False)):
+        return None
+    method_value = str(data.get('method', 'smote')).strip().lower()
+    if method_value == 'oversample':
+        return 'oversample'
+    return 'smote'
+
+
+class _SafeSmoteSampler(BaseEstimator):
+    def __init__(self, random_state: int = RANDOM_STATE):
+        self.random_state = random_state
+
+    def fit_resample(self, X, y):  # type: ignore[override]
+        if SMOTE is None or RandomOverSampler is None:
+            raise MissingDependencyError('Class Balancing (SMOTE)', 'imbalanced-learn')
+        smote = SMOTE(random_state=self.random_state, k_neighbors=1)
+        try:
+            return smote.fit_resample(X, y)
+        except ValueError:
+            fallback = RandomOverSampler(random_state=self.random_state)
+            return fallback.fit_resample(X, y)
+
+
+def _build_sampler(strategy: Optional[BalanceStrategy]) -> Optional[BaseEstimator]:
+    if strategy is None:
+        return None
+    if RandomOverSampler is None or SMOTE is None or ImbalancedPipeline is None:
+        raise MissingDependencyError('Class Balancing', 'imbalanced-learn')
+    if strategy == 'oversample':
+        return RandomOverSampler(random_state=RANDOM_STATE)
+    return _SafeSmoteSampler(random_state=RANDOM_STATE)
+
+
+def _build_classifier_pipeline(
+    preprocessor: ColumnTransformer,
+    classifier: BaseEstimator,
+    balance_strategy: Optional[BalanceStrategy],
+) -> Pipeline:
+    steps: List[Tuple[str, Any]] = [('preprocessor', preprocessor)]
+    sampler = _build_sampler(balance_strategy) if balance_strategy else None
+    if sampler is None:
+        steps.append(('classifier', classifier))
+        return Pipeline(steps=steps)
+    if ImbalancedPipeline is None:
+        raise MissingDependencyError('Class Balancing', 'imbalanced-learn')
+    sampler_steps: List[Tuple[str, Any]] = steps + [('sampler', sampler), ('classifier', classifier)]
+    return ImbalancedPipeline(steps=sampler_steps)
 
 
 def _prepare_param_grid(
@@ -518,12 +580,11 @@ def _train_logistic(
     evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
-    pipeline = Pipeline(steps=[
-        ('preprocessor', preprocessor),
-        ('classifier', LogisticRegression(max_iter=2000, solver='lbfgs')),
-    ])
+    classifier = LogisticRegression(max_iter=2000, solver='lbfgs')
+    pipeline = _build_classifier_pipeline(preprocessor, classifier, balance_strategy)
     default_grid = {'classifier__C': [0.01, 0.1, 1.0, 10.0]}
     hard_grid = {'classifier__C': [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]}
     param_grid = _prepare_param_grid(
@@ -558,12 +619,11 @@ def _train_knn(
     evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
-    pipeline = Pipeline(steps=[
-        ('preprocessor', preprocessor),
-        ('classifier', KNeighborsClassifier()),
-    ])
+    classifier = KNeighborsClassifier()
+    pipeline = _build_classifier_pipeline(preprocessor, classifier, balance_strategy)
     n_samples = len(df)
     max_k = max(1, min(n_samples - 1, 51))
     k_values = [k for k in range(1, max_k + 1, 2)]
@@ -607,12 +667,11 @@ def _train_svm(
     evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
-    pipeline = Pipeline(steps=[
-        ('preprocessor', preprocessor),
-        ('classifier', SVC(probability=True)),
-    ])
+    classifier = SVC(probability=True)
+    pipeline = _build_classifier_pipeline(preprocessor, classifier, balance_strategy)
     if 'Low' in flexibility:
         Cs = [0.1, 1]
         gammas = [0.001, 0.01]
@@ -667,10 +726,11 @@ def _train_random_forest(
     evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
     classifier = RandomForestClassifier(random_state=RANDOM_STATE)
-    pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
+    pipeline = _build_classifier_pipeline(preprocessor, classifier, balance_strategy)
     default_grid = {
         'classifier__n_estimators': [200, 400],
         'classifier__max_depth': [None, 10, 20],
@@ -712,10 +772,11 @@ def _train_gradient_boost(
     evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
     classifier = GradientBoostingClassifier(random_state=RANDOM_STATE)
-    pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
+    pipeline = _build_classifier_pipeline(preprocessor, classifier, balance_strategy)
     default_grid = {
         'classifier__learning_rate': [0.05, 0.1],
         'classifier__n_estimators': [100, 200],
@@ -758,6 +819,7 @@ def _train_elastic_net(
     evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
     classifier = LogisticRegression(
@@ -767,7 +829,7 @@ def _train_elastic_net(
         l1_ratio=0.5,
         random_state=RANDOM_STATE,
     )
-    pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
+    pipeline = _build_classifier_pipeline(preprocessor, classifier, balance_strategy)
     default_grid = {
         'classifier__C': [0.01, 0.1, 1.0],
         'classifier__l1_ratio': [0.2, 0.5, 0.8],
@@ -804,10 +866,11 @@ def _train_naive_bayes(
     evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> Tuple[Dict, Pipeline]:
     preprocessor = _build_preprocessor(df, columns)
     classifier = GaussianNB()
-    pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
+    pipeline = _build_classifier_pipeline(preprocessor, classifier, balance_strategy)
     default_grid = {'classifier__var_smoothing': [1e-9, 1e-8, 1e-7]}
     hard_grid = {'classifier__var_smoothing': [1e-10, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5]}
     param_grid = _prepare_param_grid(
@@ -838,6 +901,7 @@ def _train_xgboost(
     evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> Tuple[Dict, Pipeline]:
     XGBClassifier = _import_optional_estimator('xgboost', 'XGBClassifier', CLASSIFIER_NAMES['XGBoost'])
     preprocessor = _build_preprocessor(df, columns)
@@ -851,7 +915,7 @@ def _train_xgboost(
         verbosity=0,
         n_jobs=-1,
     )
-    pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
+    pipeline = _build_classifier_pipeline(preprocessor, classifier, balance_strategy)
     default_grid = {
         'classifier__n_estimators': [200, 400],
         'classifier__max_depth': [3, 5],
@@ -894,6 +958,7 @@ def _train_lightgbm(
     evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> Tuple[Dict, Pipeline]:
     LGBMClassifier = _import_optional_estimator('lightgbm', 'LGBMClassifier', CLASSIFIER_NAMES['LightGBM'])
     preprocessor = _build_preprocessor(df, columns)
@@ -903,7 +968,7 @@ def _train_lightgbm(
         n_jobs=-1,
         verbose=-1,
     )
-    pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
+    pipeline = _build_classifier_pipeline(preprocessor, classifier, balance_strategy)
     default_grid = {
         'classifier__n_estimators': [200, 400],
         'classifier__learning_rate': [0.05, 0.1],
@@ -946,6 +1011,7 @@ def _train_catboost(
     evaluation_cv: StratifiedKFold,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> Tuple[Dict, Pipeline]:
     CatBoostClassifier = _import_optional_estimator('catboost', 'CatBoostClassifier', CLASSIFIER_NAMES['CatBoost'])
     preprocessor = _build_preprocessor(df, columns)
@@ -955,7 +1021,7 @@ def _train_catboost(
         random_seed=RANDOM_STATE,
         allow_writing_files=False,
     )
-    pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
+    pipeline = _build_classifier_pipeline(preprocessor, classifier, balance_strategy)
     default_grid = {
         'classifier__iterations': [200, 400],
         'classifier__learning_rate': [0.05, 0.1],
@@ -998,6 +1064,7 @@ def _train_voting_classifier(
     requested_models: List[str],
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> Tuple[Dict, Pipeline | None]:
     estimators = _collect_base_estimators(requested_models, trained_pipelines)
     if len(estimators) < 2:
@@ -1008,7 +1075,7 @@ def _train_voting_classifier(
     voting_strategy = 'soft' if supports_soft_voting else 'hard'
     preprocessor = _build_preprocessor(df, columns)
     classifier = VotingClassifier(estimators=estimators, voting=voting_strategy)
-    pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
+    pipeline = _build_classifier_pipeline(preprocessor, classifier, balance_strategy)
     default_grid = {'classifier__weights': [None]}
     param_grid = _prepare_param_grid(
         CLASSIFIER_NAMES['Voting Classifier'],
@@ -1042,6 +1109,7 @@ def _train_stacking_classifier(
     requested_models: List[str],
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> Tuple[Dict, Pipeline | None]:
     estimators = _collect_base_estimators(requested_models, trained_pipelines)
     if len(estimators) < 2:
@@ -1064,7 +1132,7 @@ def _train_stacking_classifier(
         n_jobs=-1,
     )
     preprocessor = _build_preprocessor(df, columns)
-    pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', classifier)])
+    pipeline = _build_classifier_pipeline(preprocessor, classifier, balance_strategy)
     default_grid = {'classifier__final_estimator__C': [0.5, 1.0]}
     hard_grid = {'classifier__final_estimator__C': [0.25, 0.5, 1.0, 2.0]}
     param_grid = _prepare_param_grid(
@@ -1109,6 +1177,7 @@ def train_supervised_models(
     svm_flexibility: str,
     processing_mode: ProcessingModeType,
     custom_hyperparameters: Optional[CustomGridSpec],
+    balance_strategy: Optional[BalanceStrategy],
 ) -> List[Dict]:
     df = entry.active_df.copy()
     feature_columns = entry.current_feature_columns or entry.feature_columns
@@ -1129,25 +1198,25 @@ def train_supervised_models(
     for model_name in base_requests:
         try:
             if model_name == CLASSIFIER_NAMES['Logistic Regression']:
-                result, pipeline = _train_logistic(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_logistic(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters, balance_strategy)
             elif model_name == CLASSIFIER_NAMES['Elastic Net (Logistic Regression)']:
-                result, pipeline = _train_elastic_net(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_elastic_net(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters, balance_strategy)
             elif model_name == CLASSIFIER_NAMES['K-Nearest Neighbors (KNN)']:
-                result, pipeline = _train_knn(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_knn(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters, balance_strategy)
             elif model_name == CLASSIFIER_NAMES['Support Vector Machine (SVM)']:
-                result, pipeline = _train_svm(X, feature_columns, y, svm_flexibility, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_svm(X, feature_columns, y, svm_flexibility, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters, balance_strategy)
             elif model_name == CLASSIFIER_NAMES['Random Forest']:
-                result, pipeline = _train_random_forest(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_random_forest(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters, balance_strategy)
             elif model_name == CLASSIFIER_NAMES['Gradient Boosting']:
-                result, pipeline = _train_gradient_boost(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_gradient_boost(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters, balance_strategy)
             elif model_name == CLASSIFIER_NAMES['XGBoost']:
-                result, pipeline = _train_xgboost(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_xgboost(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters, balance_strategy)
             elif model_name == CLASSIFIER_NAMES['LightGBM']:
-                result, pipeline = _train_lightgbm(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_lightgbm(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters, balance_strategy)
             elif model_name == CLASSIFIER_NAMES['CatBoost']:
-                result, pipeline = _train_catboost(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_catboost(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters, balance_strategy)
             elif model_name == CLASSIFIER_NAMES['Naive Bayes (Gaussian)']:
-                result, pipeline = _train_naive_bayes(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters)
+                result, pipeline = _train_naive_bayes(X, feature_columns, y, tuning_cv, evaluation_cv, processing_mode, custom_hyperparameters, balance_strategy)
             else:
                 continue
         except MissingDependencyError as exc:
@@ -1169,6 +1238,7 @@ def train_supervised_models(
                 models,
                 processing_mode,
                 custom_hyperparameters,
+                balance_strategy,
             )
         elif ensemble_name == CLASSIFIER_NAMES['Stacking Classifier']:
             result, _ = _train_stacking_classifier(
@@ -1181,6 +1251,7 @@ def train_supervised_models(
                 models,
                 processing_mode,
                 custom_hyperparameters,
+                balance_strategy,
             )
         else:
             continue
@@ -1266,10 +1337,12 @@ def train_models(
     kmeans_clusters: int,
     processing_mode: str,
     custom_hyperparameters: Optional[CustomGridSpec] = None,
+    class_balance: Optional[Any] = None,
 ) -> List[Dict]:
     results: List[Dict] = []
     supervised_models = [model for model in models if model != CLASSIFIER_NAMES['K-Means Clustering']]
     normalized_mode = _normalize_processing_mode(processing_mode)
+    balance_strategy = _normalize_balance_strategy(class_balance)
     if supervised_models:
         results.extend(
             train_supervised_models(
@@ -1278,6 +1351,7 @@ def train_models(
                 svm_flexibility,
                 normalized_mode,
                 custom_hyperparameters,
+                balance_strategy,
             )
         )
     if CLASSIFIER_NAMES['K-Means Clustering'] in models:

@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { AppStep, DataSet, EdaResult, ModelResult, ProcessingMode, TrainingConfig } from './types';
+import { AppStep, ClassBalanceMethod, DataSet, EdaResult, ModelResult, ProcessingMode, TrainingConfig } from './types';
 import UploadStep from './components/UploadStep';
 import EdaStep from './components/EdaStep';
 import CleaningStep from './components/CleaningStep';
@@ -17,14 +17,19 @@ const App: React.FC = () => {
   const [trainingConfig, setTrainingConfig] = useState<TrainingConfig | null>(null);
   const [modelResults, setModelResults] = useState<ModelResult[] | null>(null);
   const [processingMode, setProcessingMode] = useState<ProcessingMode>(ProcessingMode.LIGHT);
+  const [classBalanceMethod, setClassBalanceMethod] = useState<ClassBalanceMethod>(ClassBalanceMethod.SMOTE);
+  const [classBalanceEnabled, setClassBalanceEnabled] = useState<boolean>(true);
 
   const handleDataUploaded = (data: DataSet) => {
     setDataSet(data);
+    setClassBalanceMethod(ClassBalanceMethod.SMOTE);
+    setClassBalanceEnabled(true);
     setCurrentStep(AppStep.EDA);
   };
 
   const handleEdaComplete = (result: EdaResult) => {
     setEdaResult(result);
+    setClassBalanceEnabled(Boolean(result.targetDistribution.imbalance));
     setCurrentStep(AppStep.Cleaning);
   };
 
@@ -34,7 +39,11 @@ const App: React.FC = () => {
   };
 
   const handleConfigComplete = (config: TrainingConfig) => {
-    setTrainingConfig(config);
+    const classBalance = {
+      enabled: classBalanceEnabled,
+      method: classBalanceMethod,
+    };
+    setTrainingConfig({ ...config, classBalance });
     setCurrentStep(AppStep.Results);
   };
 
@@ -48,6 +57,8 @@ const App: React.FC = () => {
     setCleanedDataSet(null);
     setTrainingConfig(null);
     setModelResults(null);
+    setClassBalanceMethod(ClassBalanceMethod.SMOTE);
+    setClassBalanceEnabled(true);
     setCurrentStep(AppStep.Upload);
   };
 
@@ -63,12 +74,28 @@ const App: React.FC = () => {
         );
       case AppStep.EDA:
         if (dataSet) {
-          return <EdaStep dataSet={dataSet} onEdaComplete={handleEdaComplete} />;
+          return (
+            <EdaStep
+              dataSet={dataSet}
+              onEdaComplete={handleEdaComplete}
+              classBalanceMethod={classBalanceMethod}
+              onClassBalanceMethodChange={setClassBalanceMethod}
+            />
+          );
         }
         return null;
       case AppStep.Cleaning:
         if (dataSet && edaResult) {
-          return <CleaningStep dataSet={dataSet} edaResult={edaResult} onCleaningComplete={handleCleaningComplete} />;
+          return (
+            <CleaningStep
+              dataSet={dataSet}
+              edaResult={edaResult}
+              onCleaningComplete={handleCleaningComplete}
+              classBalanceMethod={classBalanceMethod}
+              classBalanceEnabled={classBalanceEnabled}
+              onClassBalanceEnabledChange={setClassBalanceEnabled}
+            />
+          );
         }
         return null;
       case AppStep.Configuration:

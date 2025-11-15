@@ -1,3 +1,7 @@
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LogisticRegression
+import pytest
+
 from backend.services import training
 
 
@@ -28,3 +32,18 @@ def test_prepare_param_grid_custom_converts_and_prefixes():
     result = training._prepare_param_grid(model_name, 'custom', custom_grid, default)  # type: ignore[attr-defined]
     assert result['classifier__learning_rate'] == [0.01, 0.1]
     assert result['classifier__max_depth'] == [3, 5]
+
+
+def test_normalize_balance_strategy_handles_disabled() -> None:
+    assert training._normalize_balance_strategy(None) is None  # type: ignore[attr-defined]
+    assert training._normalize_balance_strategy({'enabled': False, 'method': 'smote'}) is None  # type: ignore[attr-defined]
+    cfg = {'enabled': True, 'method': 'OVERSAMPLE'}
+    assert training._normalize_balance_strategy(cfg) == 'oversample'  # type: ignore[attr-defined]
+
+
+def test_build_classifier_pipeline_attaches_sampler() -> None:
+    pytest.importorskip('imblearn')
+    preprocessor = ColumnTransformer([('identity', 'passthrough', [0])])
+    classifier = LogisticRegression()
+    pipeline = training._build_classifier_pipeline(preprocessor, classifier, 'smote')  # type: ignore[attr-defined]
+    assert 'sampler' in pipeline.named_steps

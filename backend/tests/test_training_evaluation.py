@@ -48,6 +48,7 @@ def test_supervised_training_returns_std_metrics() -> None:
         svm_flexibility='Medium (Balanced)',
         processing_mode='light',
         custom_hyperparameters=None,
+        balance_strategy=None,
     )
     assert results, 'Expected at least one trained model'
     logistic = results[0]
